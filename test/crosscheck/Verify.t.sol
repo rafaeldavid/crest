@@ -110,7 +110,7 @@ contract CrossCheckVerifyTest is RedTeamBase {
 
     /// A key that is a child vault's principal moves: the child, whose parent grant closed, can no longer pay, and its
     /// money comes back by the key itself or by the principal.
-    function test_aMovedKey_itsChildVaultStopsPaying_andItsMoneyComesBack() public {
+    function test_aMovedKey_itsChildVaultStopsPaying_andAllItsFundsReturn() public {
         vm.prank(buyer);
         vault.setCaps(subGrant, _caps(HOLD, 3 * HOLD, type(uint128).max, 100, false, true), "");
         vm.startPrank(sub);
