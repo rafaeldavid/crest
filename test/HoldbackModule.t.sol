@@ -49,7 +49,9 @@ contract HoldbackModuleTest is CrestBase {
         _deliver(t, id);
         rules.decide(t, _primary(t, id, H.OUTCOME_REJECT), _noDelivery(), "");
         assertEq(uint8(_stage(id)), uint8(IHoldbackRules.Stage.Refunded));
-        assertEq(usdc.balanceOf(address(vault)) - afterFunding, PRICE, "the price came back; the fee paid the adjudicator");
+        assertEq(
+            usdc.balanceOf(address(vault)) - afterFunding, PRICE, "the price came back; the fee paid the adjudicator"
+        );
         module.close(t);
         assertEq(_grantOf(vault, agentGrant).inPeriod, HOLD, "gross: the refund does not give the day back");
     }
@@ -60,7 +62,11 @@ contract HoldbackModuleTest is CrestBase {
         _fundVia(_vterms(address(vault), buyer), BUYER_PK);
         _fundVia(_vterms(address(vault), buyer), BUYER_PK);
         vm.warp(dayEnd - 1);
-        _expectRefused(_vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.OverPerPeriod.selector, agentGrant));
+        _expectRefused(
+            _vterms(address(vault), buyer),
+            BUYER_PK,
+            abi.encodeWithSelector(ICrestVault.OverPerPeriod.selector, agentGrant)
+        );
         vm.warp(dayEnd);
         _fundVia(_vterms(address(vault), buyer), BUYER_PK);
     }
@@ -75,8 +81,14 @@ contract HoldbackModuleTest is CrestBase {
 
     function test_attack_overPerDay_refused() public {
         _setAgentCaps(_caps(HOLD, 3 * HOLD, type(uint128).max, 10, true, true));
-        for (uint256 i; i < 3; i++) _fundVia(_vterms(address(vault), buyer), BUYER_PK);
-        _expectRefused(_vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.OverPerPeriod.selector, agentGrant));
+        for (uint256 i; i < 3; i++) {
+            _fundVia(_vterms(address(vault), buyer), BUYER_PK);
+        }
+        _expectRefused(
+            _vterms(address(vault), buyer),
+            BUYER_PK,
+            abi.encodeWithSelector(ICrestVault.OverPerPeriod.selector, agentGrant)
+        );
     }
 
     function test_attack_overLifetime_refused() public {
@@ -84,14 +96,22 @@ contract HoldbackModuleTest is CrestBase {
         _fundVia(_vterms(address(vault), buyer), BUYER_PK);
         _fundVia(_vterms(address(vault), buyer), BUYER_PK);
         vm.warp(block.timestamp + 2 days);
-        _expectRefused(_vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.OverLifetime.selector, agentGrant));
+        _expectRefused(
+            _vterms(address(vault), buyer),
+            BUYER_PK,
+            abi.encodeWithSelector(ICrestVault.OverLifetime.selector, agentGrant)
+        );
     }
 
     function test_attack_tooManyOpen_refused_untilOneCloses() public {
         H.Terms memory t1 = _vterms(address(vault), buyer);
         bytes32 id1 = _fundVia(t1, BUYER_PK);
         _fundVia(_vterms(address(vault), buyer), BUYER_PK);
-        _expectRefused(_vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.TooManyOpen.selector, agentGrant));
+        _expectRefused(
+            _vterms(address(vault), buyer),
+            BUYER_PK,
+            abi.encodeWithSelector(ICrestVault.TooManyOpen.selector, agentGrant)
+        );
         _release(t1, id1);
         module.close(t1);
         _fundVia(_vterms(address(vault), buyer), BUYER_PK);
@@ -112,7 +132,9 @@ contract HoldbackModuleTest is CrestBase {
     function test_attack_afterPause_refused_andTheAgentCannotResume() public {
         vm.prank(owner);
         vault.setPaused(agentGrant, true);
-        _expectRefused(_vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.Paused.selector, agentGrant));
+        _expectRefused(
+            _vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.Paused.selector, agentGrant)
+        );
         vm.prank(buyer);
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
         vault.setPaused(agentGrant, false);
@@ -124,16 +146,26 @@ contract HoldbackModuleTest is CrestBase {
     function test_attack_afterTheOwnerPausesTheRoot_refused() public {
         vm.prank(owner);
         vault.setPaused(ROOT, true);
-        _expectRefused(_vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.Paused.selector, ROOT));
+        _expectRefused(
+            _vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.Paused.selector, ROOT)
+        );
     }
 
     function test_attack_afterClose_refusedForGood() public {
         vm.prank(buyer);
         vault.close(agentGrant);
-        _expectRefused(_vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.GrantClosed.selector, agentGrant));
+        _expectRefused(
+            _vterms(address(vault), buyer),
+            BUYER_PK,
+            abi.encodeWithSelector(ICrestVault.GrantClosed.selector, agentGrant)
+        );
         vm.prank(owner);
         vault.setPaused(agentGrant, false);
-        _expectRefused(_vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.GrantClosed.selector, agentGrant));
+        _expectRefused(
+            _vterms(address(vault), buyer),
+            BUYER_PK,
+            abi.encodeWithSelector(ICrestVault.GrantClosed.selector, agentGrant)
+        );
     }
 
     function test_attack_expiredGrant_refused() public {
@@ -141,7 +173,9 @@ contract HoldbackModuleTest is CrestBase {
         c.expiresAt = uint40(block.timestamp + 1 hours);
         _setAgentCaps(c);
         vm.warp(block.timestamp + 1 hours);
-        _expectRefused(_vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.Expired.selector, agentGrant));
+        _expectRefused(
+            _vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.Expired.selector, agentGrant)
+        );
     }
 
     function test_attack_keyWithNoGrant_refused() public {
@@ -159,7 +193,9 @@ contract HoldbackModuleTest is CrestBase {
         other.agreeAndFund(t, s, a, ag, H.Funding({signature: new bytes(65)}));
         vm.prank(owner);
         vault.setModule(address(module), address(0));
-        _expectRefused(_vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.ModuleNotEnabled.selector));
+        _expectRefused(
+            _vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.ModuleNotEnabled.selector)
+        );
     }
 
     function test_attack_fundingStraightToTheRulesContract_refused() public {
@@ -190,15 +226,18 @@ contract HoldbackModuleTest is CrestBase {
         // The agent signs a ReceiveWithAuthorization moving the vault's money to itself, and submits it itself.
         bytes32 nonce = keccak256("steal");
         bytes32 structHash = keccak256(
-            abi.encode(RECEIVE_WITH_AUTHORIZATION_TYPEHASH, address(vault), buyer, HOLD, uint256(0), block.timestamp + 1, nonce)
+            abi.encode(
+                RECEIVE_WITH_AUTHORIZATION_TYPEHASH, address(vault), buyer, HOLD, uint256(0), block.timestamp + 1, nonce
+            )
         );
-        bytes memory sig = _signRaw(BUYER_PK, keccak256(abi.encodePacked("\x19\x01", usdc.DOMAIN_SEPARATOR(), structHash)));
+        bytes memory sig =
+            _signRaw(BUYER_PK, keccak256(abi.encodePacked("\x19\x01", usdc.DOMAIN_SEPARATOR(), structHash)));
         vm.prank(buyer);
         vm.expectRevert();
         usdc.receiveWithAuthorization(address(vault), buyer, HOLD, 0, block.timestamp + 1, nonce, sig);
     }
 
-    function test_attack_theVaultAnswersOnlyTheToken_andOnlyAnApprovedDigest() public view {
+    function test_theVaultAnswersNoForADigestItNeverApproved() public view {
         bytes32 h = keccak256("anything");
         assertEq(vault.isValidSignature(h, ""), bytes4(0xffffffff), "not the token");
     }
@@ -248,7 +287,9 @@ contract HoldbackModuleTest is CrestBase {
         _release(t, id);
         module.close(t);
         uint256 spent = _grantOf(vault, agentGrant).spent;
-        _expectRefused(t, BUYER_PK, abi.encodeWithSelector(IHoldbackRules.WrongStage.selector, IHoldbackRules.Stage.Released));
+        _expectRefused(
+            t, BUYER_PK, abi.encodeWithSelector(IHoldbackRules.WrongStage.selector, IHoldbackRules.Stage.Released)
+        );
         assertEq(_grantOf(vault, agentGrant).spent, spent);
     }
 

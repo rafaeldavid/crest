@@ -74,7 +74,9 @@ contract ChildVaultTest is CrestBase {
         vault.fundChild(address(child), 2 * HOLD);
         vm.prank(owner);
         vault.setPaused(agentGrant, true);
-        _expectRefused(_vterms(address(child), sub), SUB_PK, abi.encodeWithSelector(ICrestVault.Paused.selector, agentGrant));
+        _expectRefused(
+            _vterms(address(child), sub), SUB_PK, abi.encodeWithSelector(ICrestVault.Paused.selector, agentGrant)
+        );
     }
 
     function test_attack_childEnablesItsOwnModuleOrWithdraws_refused() public {

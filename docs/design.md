@@ -51,7 +51,9 @@ A second venue is a second module; the vault does not change.
 - **The limits:** the most one payment may be; the most a period's payments may add up to, with the period's length in seconds (86,400 for a UTC day); the most the grant may ever pay; how many commitments may be open at once; an expiry; whether the controller may grant children or create child vaults. The largest value of each type means no limit of that kind. An allow list, when the grant is restricted, names the counterparties it may pay.
 - **Every payment charges the grant and every grant above it,** checking each one's state, expiry, limits and list, and adding to each one's counters. One refusal reverts the payment, and nothing is counted.
 - **A child granted wider limits than its parent is still bound** by the parent at payment time, so the vault never compares limits when a grant is made.
-- **Who may do what.** The owner withdraws, enables modules and acts on any grant. A controller above a grant may stop it, resume it, set its limits and list its counterparties. A grant's own controller may stop itself and, when allowed, grant children; it may never widen or resume its own grant.
+- **Who may do what.** The owner withdraws, enables modules, hands the vault over and acts on any grant. A controller above a grant may pause, resume or close it, set its limits and list its counterparties. A grant's own controller may pause or close itself and, when allowed, grant children and create and fill child vaults; it may never widen, resume or reopen its own grant.
+- **A pause has no rank.** Anyone above a paused grant can lift the pause, so an owner who distrusts an agent pauses the agent's own grant, which stops everything below it; the agent cannot lift that.
+- **Keys are first come.** A key holds one grant per vault and grants are never deleted, so an agent that may delegate can take a key the owner meant to use. Owners pick fresh keys for successors and agents.
 - **Periods are fixed windows** (`floor(time / period)`), with no carry-over. A refund does not give a period's limit back: the counters are gross, and the refunded money returns to the vault.
 - **Open commitments are counted, not their total.** The total at risk is already bounded by the count times the per-payment limit. The module that opened a commitment releases it when the venue says it has ended; anyone may ask it to.
 
@@ -62,6 +64,8 @@ A second venue is a second module; the vault does not change.
 - **Bound from above:** each payment from a child is checked against the parent grant's path for its state, expiry, per-payment limit and approved counterparties, through the whole chain of parents. A stop anywhere above stops the child at once.
 - **Modules come from the top:** a child pays only through modules enabled at the top vault, to the payees pinned there. A child's owner cannot enable a module.
 - **Money goes back up only:** a child sends money to its parent vault and nowhere else. Its owner, and anyone with authority over the parent grant, can send it back.
+- **The child's root extends the parent grant:** only authority strictly above the parent grant can widen, resume or reopen it; the grant's controller manages everything below it. Filling a child needs the parent grant's right to delegate and an unpaused path above it.
+- **No handover strands a child:** a child vault cannot be handed over, and a top vault's root creates no child, so a change of owner never leaves a child with the previous one.
 
 ### 4. Payments
 
@@ -88,7 +92,8 @@ No owner, controller, module or factory can stop a funded deal from settling by 
 
 ### 8. Measured on the first build
 
-- `forge test` on Holdback's own test world and its unchanged rules contract: every control's attack refused by name, the owner emptying the vault after a funding while the deal still ends Released, and the escrow's `reclaim` after expiry returning the hold to the vault [measured, 2026-11-19].
+- `forge test` on Holdback's own test world and its unchanged rules contract: an attack test for each control in section 9, refused by name; five invariants over random payments through a tree (no grant passes its total, period or open limit; every level counts what passes through it; money leaves only to the pinned payee); a fuzz test that the approved digest equals the collector's for any terms; and a selector allowlist [measured, 2026-11-19]. One review and one red-team pass found three child-vault authority gaps and missing attack tests; each is fixed and covered by a test.
+- Static analysis: Slither and Aderyn report no finding of High impact that holds on reading; their ordering and unused-return findings are fixed [measured].
 - On a local chain with Holdback's operator code, a funding sent from a Crest vault through the Holdback module was followed with no change to the operators, and the deal ended Released; a funding over the per-deal limit reverted [measured, 2026-11-19, at this repository's commit `e532074`].
 - A funding through a vault one level below the root costs 390,634 gas, against 297,568 from a plain key, measured in the same forge test [measured].
 

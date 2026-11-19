@@ -30,6 +30,9 @@ jobs:
       - uses: foundry-rs/foundry-toolchain@dba66c27052e63476d886f22216e119ba7e615bf # v1
         with:
           version: v1.0.0
+      - name: forge fmt
+        run: |
+          if [ -f foundry.toml ]; then forge fmt --check src test; fi
       - name: forge test
         run: |
           if [ -f foundry.toml ]; then forge test; else echo "no contracts yet"; fi

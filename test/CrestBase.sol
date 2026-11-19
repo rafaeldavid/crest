@@ -49,11 +49,14 @@ abstract contract CrestBase is Base {
         usdc.mint(address(vault), 1_000 * HOLD);
     }
 
-    function _caps(uint256 perSpend, uint256 perPeriod, uint256 lifetime, uint32 maxOpen, bool restricted, bool mayDelegate)
-        internal
-        pure
-        returns (ICrestVault.Caps memory)
-    {
+    function _caps(
+        uint256 perSpend,
+        uint256 perPeriod,
+        uint256 lifetime,
+        uint32 maxOpen,
+        bool restricted,
+        bool mayDelegate
+    ) internal pure returns (ICrestVault.Caps memory) {
         return ICrestVault.Caps({
             perSpend: uint128(perSpend),
             perPeriod: uint128(perPeriod),
@@ -84,7 +87,11 @@ abstract contract CrestBase is Base {
 
     function _fundVia(H.Terms memory t, uint256 buyerPk) internal returns (bytes32) {
         return module.agreeAndFund(
-            t, _sellerSig(t, SELLER_PK), _acceptance(t, ADJ_PK), _agree(t, buyerPk), H.Funding({signature: new bytes(65)})
+            t,
+            _sellerSig(t, SELLER_PK),
+            _acceptance(t, ADJ_PK),
+            _agree(t, buyerPk),
+            H.Funding({signature: new bytes(65)})
         );
     }
 

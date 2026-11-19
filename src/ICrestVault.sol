@@ -13,17 +13,21 @@ import {AuthCaptureEscrow} from "commerce-payments/AuthCaptureEscrow.sol";
 ///         and nothing is counted. A child granted wider limits than its parent is still bound by the parent at payment
 ///         time, so limits are never compared when a grant is made.
 ///
-///         Who may do what. A top vault's owner withdraws, enables modules and acts on any grant. A controller above a
-///         grant, at any level, may pause, resume, close or set the limits of that grant and list its counterparties. A
-///         grant's own controller may pause or close itself and, when its grant allows it, grant children and create
-///         child vaults. It can never widen, resume or reopen its own grant.
+///         Who may do what. A top vault's owner withdraws, enables modules, hands the vault over and acts on any grant.
+///         A controller above a grant, at any level, may pause, resume, close or set the limits of that grant and list
+///         its counterparties. A grant's own controller may pause or close itself and, when its grant allows it, grant
+///         children and create and fill child vaults. It can never widen, resume or reopen its own grant. A pause can
+///         be lifted by anyone above the paused grant, so to stop an agent and everything below it, pause the agent's
+///         own grant.
 ///
-///         Child vaults. A grant's controller may create a child vault through this vault, own it, and fill it from
-///         this vault within the grant's period and total limits. Every payment from the child is also checked against
-///         the parent grant's path, and the paths above it in every ancestor vault, for state, expiry, per-payment
-///         limit and allow lists. A child pays only through modules enabled at the top vault, to the payees pinned
-///         there, and sends money only back to its parent. Anyone with authority over the parent grant has authority
-///         over the child.
+///         Child vaults. A grant's controller may create a child vault through this vault, own it for good, and fill it
+///         from this vault within the grant's period and total limits. The child's root is an extension of that grant:
+///         only authority strictly above the grant can widen, resume or reopen it, and the grant's controller manages
+///         everything below it. Every payment from the child is also checked against the parent grant's path, and the
+///         paths above it in every ancestor vault, for state, expiry, per-payment limit and allow lists. A child pays
+///         only through modules enabled at the top vault, to the payees pinned there, and sends money only back to its
+///         parent. A child cannot be handed over, and a top vault's root creates no child, so a handover never leaves
+///         a child with the previous owner.
 ///
 ///         Payments. An enabled module asks the vault to `charge` a key's grant. After the charge the vault approves
 ///         exactly one ERC-3009 `ReceiveWithAuthorization`: from the vault, to the module's pinned payee, for exactly
@@ -95,8 +99,9 @@ interface ICrestVault {
     event Released(uint256 indexed grant, bytes32 indexed commitment, uint256 amount);
     event ChildCreated(address indexed child, uint256 indexed grant, address indexed owner);
     event ChildFunded(address indexed child, uint256 indexed grant, uint256 amount, address by);
+    event ChildTakenBack(address indexed child, uint256 indexed grant, uint256 amount, address indexed by);
     event ReturnedToParent(address indexed parent, uint256 amount, address indexed by);
-    event Reclaimed(address indexed module, address indexed escrow);
+    event Reclaimed(address indexed module, address indexed escrow, uint256 amount);
 
     // Errors. A refusal by a limit names the grant that refused.
 
@@ -109,6 +114,7 @@ interface ICrestVault {
     error GrantExists();
     error MayNotDelegate();
     error UnknownChild();
+    error NoChildFromTheRoot();
     error ModuleNotEnabled();
     error CommitmentOpen();
     error NotOpen();
@@ -131,10 +137,12 @@ interface ICrestVault {
 
     // The owner
 
-    /// @notice The owner proposes a new owner; the proposed key takes over with `acceptOwner`.
+    /// @notice A top vault's owner proposes a new owner; the proposed key takes over with `acceptOwner`. A child
+    ///         vault cannot be handed over.
     function proposeOwner(address proposed) external;
 
-    /// @notice The proposed key becomes the owner and the controller of the root grant.
+    /// @notice The proposed key becomes the top vault's owner and the controller of its root grant. It must hold no
+    ///         other grant in the vault.
     function acceptOwner() external;
 
     /// @notice A top vault's owner enables `module` to have this vault pay `payee`, or disables it with payee 0.
@@ -150,7 +158,9 @@ interface ICrestVault {
     /// @notice Grants `controller` a child of `parentId` with `caps`. By `parentId`'s controller when its grant may
     ///         delegate, or by anyone with authority above `parentId`. The ID is `keccak256(parentId, controller, salt)`.
     /// @return id The new grant's ID.
-    function grant(uint256 parentId, address controller, Caps calldata caps, bytes32 salt) external returns (uint256 id);
+    function grant(uint256 parentId, address controller, Caps calldata caps, bytes32 salt)
+        external
+        returns (uint256 id);
 
     /// @notice Sets the limits of grant `id`. By anyone with authority above it.
     function setCaps(uint256 id, Caps calldata caps) external;
@@ -167,13 +177,15 @@ interface ICrestVault {
 
     // Child vaults
 
-    /// @notice Creates a child vault owned by grant `grantId`'s controller, through the factory. By that controller
-    ///         when its grant may delegate, or by authority above it.
+    /// @notice Creates a child vault owned by grant `grantId`'s controller, through the factory, or returns it when it
+    ///         exists. By that controller when its grant may delegate, or by authority above it, while no grant on its
+    ///         path here or in an ancestor vault is paused, closed or expired. A top vault's root creates no child.
     /// @return child The child vault's address.
     function createChild(uint256 grantId, bytes32 salt) external returns (address child);
 
     /// @notice Moves `amount` into `child`, charged to the path of the grant that created it for its state, expiry,
-    ///         period and total limits. By that grant's controller or authority above it.
+    ///         period and total limits, while no grant above it in an ancestor vault is paused, closed or expired. By
+    ///         that grant's controller when its grant may delegate, or by authority above it.
     function fundChild(address child, uint256 amount) external;
 
     /// @notice Has `child` send `amount` back to this vault. By the grant's controller or authority above it.
@@ -210,9 +222,12 @@ interface ICrestVault {
 
     // Views used across vaults
 
-    /// @notice Whether `who` controls grant `id` or any grant above it, here or in any ancestor vault, or is a top
-    ///         vault's owner.
+    /// @notice Whether `who` controls grant `id` or has authority above it.
     function authorityOver(address who, uint256 id) external view returns (bool);
+
+    /// @notice Whether `who` has authority strictly above grant `id`: it controls a grant above `id` here, or has
+    ///         authority strictly above this vault's parent grant in the parent vault, or it is this top vault's owner.
+    function isAbove(address who, uint256 id) external view returns (bool);
 
     /// @notice Reverts as `charge` would for `amount` and `counterparty` on grant `id`'s path, here and in every
     ///         ancestor vault, for state, expiry, per-payment limit and allow lists. Counts nothing.

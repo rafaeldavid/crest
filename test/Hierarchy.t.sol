@@ -42,19 +42,27 @@ contract HierarchyTest is CrestBase {
         _fundVia(_vterms(address(vault), sub), SUB_PK);
         _fundVia(_vterms(address(vault), sub), SUB_PK);
         _fundVia(_vterms(address(vault), sub2), SUB2_PK);
-        _expectRefused(_vterms(address(vault), sub2), SUB2_PK, abi.encodeWithSelector(ICrestVault.OverPerPeriod.selector, agentGrant));
+        _expectRefused(
+            _vterms(address(vault), sub2),
+            SUB2_PK,
+            abi.encodeWithSelector(ICrestVault.OverPerPeriod.selector, agentGrant)
+        );
     }
 
     function test_attack_pausingTheAgent_stopsItsSubAgents() public {
         vm.prank(owner);
         vault.setPaused(agentGrant, true);
-        _expectRefused(_vterms(address(vault), sub), SUB_PK, abi.encodeWithSelector(ICrestVault.Paused.selector, agentGrant));
+        _expectRefused(
+            _vterms(address(vault), sub), SUB_PK, abi.encodeWithSelector(ICrestVault.Paused.selector, agentGrant)
+        );
     }
 
     function test_theAgentPausesItsSubAgent_andOnlyAuthorityAboveTheSubAgentResumes() public {
         vm.prank(buyer);
         vault.setPaused(subGrant, true);
-        _expectRefused(_vterms(address(vault), sub), SUB_PK, abi.encodeWithSelector(ICrestVault.Paused.selector, subGrant));
+        _expectRefused(
+            _vterms(address(vault), sub), SUB_PK, abi.encodeWithSelector(ICrestVault.Paused.selector, subGrant)
+        );
         vm.prank(sub);
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
         vault.setPaused(subGrant, false);

@@ -21,10 +21,10 @@ contract CrestFactory is ICrestFactory {
         bytes32 s = keccak256(abi.encode(owner, token, salt));
         vault = LibClone.predictDeterministicAddress(IMPLEMENTATION, s, address(this));
         if (vault.code.length != 0) return vault;
-        LibClone.cloneDeterministic(IMPLEMENTATION, s);
-        CrestVault(vault).initialize(owner, token, address(0), 0);
         isVault[vault] = true;
         emit VaultCreated(vault, owner, token, salt);
+        vault = LibClone.cloneDeterministic(IMPLEMENTATION, s);
+        CrestVault(vault).initialize(owner, token, address(0), 0);
     }
 
     /// @inheritdoc ICrestFactory
@@ -33,10 +33,11 @@ contract CrestFactory is ICrestFactory {
         bytes32 s = keccak256(abi.encode(msg.sender, owner, parentGrant, salt));
         child = LibClone.predictDeterministicAddress(IMPLEMENTATION, s, address(this));
         if (child.code.length != 0) return child;
-        LibClone.cloneDeterministic(IMPLEMENTATION, s);
-        CrestVault(child).initialize(owner, CrestVault(msg.sender).token(), msg.sender, parentGrant);
+        address token = CrestVault(msg.sender).token();
         isVault[child] = true;
         emit ChildVaultCreated(child, msg.sender, owner, parentGrant);
+        child = LibClone.cloneDeterministic(IMPLEMENTATION, s);
+        CrestVault(child).initialize(owner, token, msg.sender, parentGrant);
     }
 
     /// @inheritdoc ICrestFactory

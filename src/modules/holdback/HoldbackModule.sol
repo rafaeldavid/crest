@@ -35,24 +35,24 @@ contract HoldbackModule is IHoldbackModule, ICrestEscrowModule {
         H.Funding calldata f
     ) external returns (bytes32 id) {
         if (f.signature.length != 65) revert FundingSignatureNot65Bytes();
-        id = H.commitmentId(t);
+        bytes32 commitment = H.commitmentId(t);
         ICrestVault(t.buyerPaymentAddress).charge(
             t.buyer,
             t.price + t.fee,
             counterpartyOf(t.sellerPayoutAddress, t.adjudicator, t.fallbackAdjudicator, t.appealAdjudicator),
-            id,
+            commitment,
             t.timing.fundBy,
-            _nonce(t, id)
+            _nonce(t, commitment)
         );
-        RULES.agreeAndFund(t, sellerSignature, acc, ag, f);
+        id = RULES.agreeAndFund(t, sellerSignature, acc, ag, f);
     }
 
     /// @inheritdoc IHoldbackModule
     function close(H.Terms calldata t) external {
         bytes32 id = H.commitmentId(t);
         IHoldbackRules.Stage s = RULES.dealOf(id).stage;
-        bool ended =
-            s == IHoldbackRules.Stage.Released || s == IHoldbackRules.Stage.Refunded || s == IHoldbackRules.Stage.Settled;
+        bool ended = s == IHoldbackRules.Stage.Released || s == IHoldbackRules.Stage.Refunded
+            || s == IHoldbackRules.Stage.Settled;
         if (!ended && block.timestamp < _expiry(t)) revert NotEnded();
         ICrestVault(t.buyerPaymentAddress).release(id);
     }
@@ -76,13 +76,10 @@ contract HoldbackModule is IHoldbackModule, ICrestEscrowModule {
         return address(ESCROW);
     }
 
-    /// @dev The escrow's expiry, as the rules contract derives it (`HoldbackRules._escrowExpiry`).
     function _expiry(H.Terms calldata t) internal view returns (uint256) {
         return uint256(t.timing.fallbackBy) + t.timing.appealDecideSec + EXPIRY_MARGIN;
     }
 
-    /// @dev The collector's nonce: the payer-agnostic hash of the payment record the rules contract derives from the
-    ///      terms (`HoldbackRules._paymentInfo`). A wrong derivation fails closed: the token refuses the funding.
     function _nonce(H.Terms calldata t, bytes32 id) internal view returns (bytes32) {
         uint48 expiry = uint48(_expiry(t));
         return ESCROW.getHash(

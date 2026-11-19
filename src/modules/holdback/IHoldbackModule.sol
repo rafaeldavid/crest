@@ -17,7 +17,10 @@ import {HoldbackTypes as H} from "holdback/HoldbackTypes.sol";
 ///         Why an approved merchant holds through the escrow: Holdback pays a hold out only to the terms' payout
 ///         address or back to the payment address. So a vault that lists a payout address knows the money can reach
 ///         only that merchant or come back.
-/// @dev The owner enables this module on its vault with the escrow's ERC-3009 collector as the payee (`payee()`).
+/// @dev The owner enables this module on its vault with the escrow's ERC-3009 collector as the payee (`payee()`). The
+///      module derives the escrow's expiry, the payment record and the collector's nonce exactly as the rules contract
+///      does (`HoldbackRules._escrowExpiry`, `_paymentInfo`); a wrong derivation fails closed, as the token then refuses
+///      the funding.
 interface IHoldbackModule {
     error FundingSignatureNot65Bytes();
     error NotEnded();
