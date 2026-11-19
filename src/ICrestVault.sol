@@ -201,9 +201,10 @@ interface ICrestVault {
     function acceptPrincipal(bytes calldata note) external;
 
     /// @notice A top vault's principal enables `module` to have this vault pay `payee`, or disables it with payee 0.
-    ///         Child vaults inherit the top vault's modules and cannot set their own. A module that is also an
-    ///         `ICrestBuyerModule` decides, while enabled, which buyer messages the vault signs for deals it names the
-    ///         vault the buyer of: enable only a module whose message views are reviewed.
+    ///         Child vaults inherit the top vault's modules and cannot set their own. An enabled module decides what a
+    ///         deal it pays may look like, such as whether an agent's key may be its buyer, and one that is also an
+    ///         `ICrestBuyerModule` decides which buyer messages the vault signs: enable only modules whose rules are
+    ///         reviewed, and only the ones wanted.
     function setModule(address module, address payee, bytes calldata note) external;
 
     /// @notice A top vault's principal sends `amount` of the vault's balance to `to`. Money a venue holds is not the

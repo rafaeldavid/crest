@@ -102,6 +102,10 @@ const me = agentAccount.address.toLowerCase();
 const operators = env('HOLDBACK_OPERATORS').split(',').map((s: string) => s.trim()).filter(Boolean);
 const expect = JSON.parse(process.env['CROW_EXPECT'] || '{}');
 const read = (address: string, abi: J[], functionName: string, a: unknown[] = []) => publicClient.readContract({ address, abi, functionName, args: a });
+// A module deployed with VAULT_IS_BUYER, the only kind Crest's deploy script deploys, refuses deals whose buyer is the
+// agent's key. An older module has no such flag and takes them.
+const vaultIsBuyer = await (read(module, MODULE, 'VAULT_IS_BUYER') as Promise<boolean>).catch(() => false);
+if (BUYER === 'agent' && vaultIsBuyer) throw new Error(`the module ${module} takes only the vault as the buyer: it needs CREST_BUYER=vault, which waits for Holdback's schema v0.12 (T-549). Nothing is signed or paid.`);
 
 /** Each purchase keeps its own key store, a folder holding a copy of the agent's one key, so its records never mix. */
 function purchases(): Array<{ dir: string; saved: J }> {

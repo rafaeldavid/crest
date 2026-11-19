@@ -620,6 +620,9 @@ The vault as the buyer adds 43,471 execution gas and 13,500 calldata gas: 56,971
   - **A settlement digest names no buyer.** So the vault also answers for a settlement of a deal it paid with the agent's key as the buyer. Holdback never asks the vault about such a deal.
   - **After the escrow's expiry** anyone may end the commitment, and the vault then signs for no one on that deal. The hold comes back by the vault's `reclaim` or by Holdback's timeouts.
   - **Contract principals cannot sign.** A multisig cannot sign for the vault: the signer is an ECDSA key.
+  - **Leave only the vault-buyer module enabled.** A module without `VAULT_IS_BUYER` enabled beside it, such as Sepolia's current one, reopens the agent's own-key route [measured, red team X5 and the review's re-check].
+  - **An agent's seller offer and its terms yes are the same bytes.** When an agent's key is a deal's seller, its seller signature is byte for byte the ECDSA signature inside the vault's yes on the terms, since both sign the terms digest. It gives no power after a stop [measured, red team R3].
+- **The re-checks at `7fa34dc`** [measured]: the review passed, finding nothing Medium or above. The red team's 54 attacks, its first 37 rerun and 17 new ones against the fixes, left every fix holding. Its Low (a sibling agent funding another's terms) and the notes above are as documented.
   - **A second review** by a model from another family is recommended by both reports. It has not run.
 
 **Lines after the fixes** [measured, `wc -l`]: the six reviewed files go from 1,145 to 1,380 (+235), and all ten from 1,241 to 1,476.
@@ -640,7 +643,7 @@ So this build's deploy needs about 49.1 million gas. Estimate each creation on t
 
 **What waits.**
 - **Live deals** wait for Holdback's T-549: schema v0.12's `PartySignature` for buyer signatures, and its operators' ERC-1271 reads. Nothing here pins T-549.
-- **The client** keeps stopping before it signs as the vault until then.
+- **The client** keeps stopping before it signs as the vault until then. Its default, `CREST_BUYER=agent`, works only with a module without `VAULT_IS_BUYER`, such as Sepolia's current one. With this build's module it refuses at start and names the setting [review re-check, Low]. So the client cannot buy through this build's module until T-549.
 - **The rerun** of the two-model test with the vault as the buyer spends model credit, so it waits for the maintainer's go.
 - **The Sepolia deploy of this build** is a new factory and module at new addresses. Vaults from an earlier factory keep the agent's key as the buyer.
 
