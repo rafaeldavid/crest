@@ -43,7 +43,7 @@ contract CrestVault is ICrestVault {
     /// @inheritdoc ICrestVault
     function initialize(address principal_, address token_, address parent_, uint256 parentGrant_) external {
         if (principal != address(0)) revert AlreadyInitialized();
-        if (principal_ == address(0) || token_ == address(0)) revert NotAuthorized();
+        if (principal_ == address(0) || token_ == address(0)) revert ZeroAddress();
         (principal, token, factory, parent, parentGrant) = (principal_, token_, msg.sender, parent_, parentGrant_);
         Grant storage g = _grants[ROOT];
         g.controller = principal_;
@@ -115,7 +115,7 @@ contract CrestVault is ICrestVault {
         _requireDelegator(parentId, p);
         if (!_isTopPrincipal(msg.sender)) _requireUsable(parentId);
         if (p.closed) revert GrantClosed(parentId);
-        if (controller == address(0)) revert NotAuthorized();
+        if (controller == address(0)) revert ZeroAddress();
         _requireValid(caps);
         id = uint256(keccak256(abi.encode(parentId, controller, salt)));
         if (id <= ROOT || _grants[id].controller != address(0) || grantOf[controller] != 0) revert GrantExists();
@@ -306,19 +306,12 @@ contract CrestVault is ICrestVault {
 
     /// @inheritdoc ICrestVault
     function checkPath(uint256 id, uint256 amount, bytes32 counterparty) external view {
-        for (uint256 g = id; g != 0; g = _grants[g].parent) {
-            Grant storage x = _grants[g];
-            Caps memory c = x.caps;
-            _requireState(g, x, c);
-            if (amount > c.perSpend) revert OverPerSpend(g);
-            if (c.restricted && !allowed[g][counterparty]) revert CounterpartyNotAllowed(g);
-        }
-        if (parent != address(0)) ICrestVault(parent).checkPath(parentGrant, amount, counterparty);
+        _walk(id, true, amount, counterparty);
     }
 
     /// @inheritdoc ICrestVault
     function checkState(uint256 id) external view {
-        _requireUsable(id);
+        _walk(id, false, 0, 0);
     }
 
     /// @inheritdoc ICrestVault
@@ -388,11 +381,20 @@ contract CrestVault is ICrestVault {
     }
 
     function _requireUsable(uint256 id) internal view {
+        _walk(id, false, 0, 0);
+    }
+
+    function _walk(uint256 id, bool payment, uint256 amount, bytes32 counterparty) internal view {
         for (uint256 g = id; g != 0; g = _grants[g].parent) {
             Grant storage x = _grants[g];
-            _requireState(g, x, x.caps);
+            Caps memory c = x.caps;
+            _requireState(g, x, c);
+            if (payment && amount > c.perSpend) revert OverPerSpend(g);
+            if (payment && c.restricted && !allowed[g][counterparty]) revert CounterpartyNotAllowed(g);
         }
-        if (parent != address(0)) ICrestVault(parent).checkState(parentGrant);
+        if (parent == address(0)) return;
+        if (payment) ICrestVault(parent).checkPath(parentGrant, amount, counterparty);
+        else ICrestVault(parent).checkState(parentGrant);
     }
 
     function _requireExists(uint256 id) internal view {

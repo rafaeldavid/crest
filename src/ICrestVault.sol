@@ -115,6 +115,7 @@ interface ICrestVault {
 
     error AlreadyInitialized();
     error NotAuthorized();
+    error ZeroAddress();
     error NotTopVault();
     error NotChildVault();
     error InvalidCaps();
