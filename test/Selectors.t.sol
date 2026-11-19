@@ -7,13 +7,11 @@ import {CrestBase} from "./CrestBase.sol";
 /// any other selector reverts with any calldata from any caller.
 contract SelectorsTest is CrestBase {
     function test_theVaultsFunctions_areExactlyTheReviewedList() public view {
-        string[42] memory want = [
+        string[40] memory want = [
             "FEE_BPS()",
             "FEE_SWEEPER()",
             "ROOT()",
             "acceptPrincipal(bytes)",
-            "allow(uint256,bytes32,bool,bytes)",
-            "allowed(uint256,bytes32)",
             "authorityOver(address,uint256)",
             "cancelSignedGrant(uint256,address,bytes32,bytes)",
             "charge(address,uint256,bytes32,bytes32,uint256,bytes32)",
@@ -29,8 +27,8 @@ contract SelectorsTest is CrestBase {
             "fundChild(address,uint256,bytes)",
             "getGrant(uint256)",
             "getOpen(bytes32)",
-            "grant(uint256,address,(uint128,uint128,uint128,uint32,uint32,uint40,bool,bool),bytes32,bytes)",
-            "grantBySig((uint256,address,(uint128,uint128,uint128,uint32,uint32,uint40,bool,bool),bytes32,bytes32[],uint40,bytes),bytes)",
+            "grant(uint256,address,(uint128,uint128,uint128,uint32,uint32,uint40,bool,address),bytes32,bytes)",
+            "grantBySig((uint256,address,(uint128,uint128,uint128,uint32,uint32,uint40,bool,address),bytes32,uint40,bytes),bytes)",
             "grantOf(address)",
             "grantOfChild(address)",
             "initialize(address,address,address,uint256)",
@@ -44,7 +42,7 @@ contract SelectorsTest is CrestBase {
             "proposePrincipal(address,bytes)",
             "reclaim(address,(address,address,address,address,uint120,uint48,uint48,uint48,uint16,uint16,address,uint256))",
             "returnToParent(uint256,bytes)",
-            "setCaps(uint256,(uint128,uint128,uint128,uint32,uint32,uint40,bool,bool),bytes)",
+            "setCaps(uint256,(uint128,uint128,uint128,uint32,uint32,uint40,bool,address),bytes)",
             "setModule(address,address,bytes)",
             "setPaused(uint256,bool,bytes)",
             "takeBackFromChild(address,uint256,bytes)",

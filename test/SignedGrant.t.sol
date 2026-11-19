@@ -23,10 +23,10 @@ contract ContractController {
 /// holds.
 contract SignedGrantTest is CrestBase {
     bytes32 internal constant CAPS_TYPEHASH = keccak256(
-        "Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool restricted,bool mayDelegate)"
+        "Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool mayDelegate,address list)"
     );
     bytes32 internal constant SIGNED_GRANT_TYPEHASH = keccak256(
-        "SignedGrant(uint256 parent,address controller,Caps caps,bytes32 salt,bytes32[] counterparties,uint40 deadline,bytes note)Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool restricted,bool mayDelegate)"
+        "SignedGrant(uint256 parent,address controller,Caps caps,bytes32 salt,uint40 deadline,bytes note)Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool mayDelegate,address list)"
     );
     uint256 internal constant N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141;
     uint256 internal constant STRANGER_PK = 0x5778;
@@ -51,7 +51,6 @@ contract SignedGrantTest is CrestBase {
                 s.controller,
                 keccak256(abi.encode(CAPS_TYPEHASH, s.caps)),
                 s.salt,
-                keccak256(abi.encodePacked(s.counterparties)),
                 s.deadline,
                 keccak256(s.note)
             )
@@ -64,17 +63,14 @@ contract SignedGrantTest is CrestBase {
         return abi.encodePacked(r, ss, sv);
     }
 
-    /// The agent (Holdback's `buyer` key) gives its sub-agent `sub` one deal at a time, two holds a day, the test
-    /// merchant only, and no right to delegate.
+    /// The agent (Holdback's `buyer` key) gives its sub-agent `sub` one deal at a time, two holds a day, and no right
+    /// to delegate. The grant names no list of its own, so the agent's list above it bounds whom it pays.
     function _slip() internal view returns (ICrestVault.SignedGrant memory s) {
-        bytes32[] memory merchants = new bytes32[](1);
-        merchants[0] = _merchant();
         s = ICrestVault.SignedGrant({
             parent: agentGrant,
             controller: sub,
-            caps: _caps(HOLD, 2 * HOLD, type(uint128).max, 1, true, false),
+            caps: _caps(HOLD, 2 * HOLD, type(uint128).max, 1, false, false),
             salt: bytes32("one task"),
-            counterparties: merchants,
             deadline: uint40(vm.getBlockTimestamp() + 1 hours),
             note: "a sub-agent for one task"
         });
@@ -92,12 +88,9 @@ contract SignedGrantTest is CrestBase {
         uint256 id = _idOf(s);
         vm.expectEmit(address(vault));
         emit ICrestVault.Granted(id, agentGrant, sub, s.caps, buyer, s.note);
-        vm.expectEmit(address(vault));
-        emit ICrestVault.Allowed(id, _merchant(), true, buyer, s.note);
         vm.prank(stranger);
         assertEq(vault.grantBySig(s, sig), id);
         assertEq(vault.grantOf(sub), id);
-        assertTrue(vault.allowed(id, _merchant()));
         bytes32 deal = _fundVia(_vterms(address(vault), sub), SUB_PK);
         assertEq(uint8(_stage(deal)), uint8(IHoldbackRules.Stage.Held));
         assertEq(_grantOf(vault, id).spent, HOLD);
@@ -226,7 +219,7 @@ contract SignedGrantTest is CrestBase {
             if (i == 1) m.controller = sub2;
             if (i == 2) m.caps.perSpend += 1;
             if (i == 3) m.salt = bytes32("another task");
-            if (i == 4) m.counterparties[0] = keccak256("another merchant");
+            if (i == 4) m.caps.list = address(allowList);
             if (i == 5) m.deadline += 1;
             if (i == 6) m.note = "another note";
             vm.expectRevert(ICrestVault.NotAuthorized.selector);
@@ -501,7 +494,7 @@ contract SignedGrantTest is CrestBase {
         vm.startPrank(buyer);
         vault.setCaps(id, _wide(), "");
         vault.setPaused(id, true, "");
-        vault.allow(id, merchant, true, "");
+        allowList.set(vault, id, merchant, true, "");
         vault.close(id, "");
         vm.stopPrank();
         assertTrue(vault.authorityOver(sub, id));
@@ -523,29 +516,49 @@ contract SignedGrantTest is CrestBase {
         assertEq(_grantOf(vault, ROOT).controller, principal);
     }
 
-    /// Signatures made by `cast wallet sign --data` (alloy's EIP-712 encoder) from JSON typed data, not by this file:
-    /// one with a counterparty and a note, one with an empty list and an empty note.
+    /// Signatures made by `cast wallet sign --data` (alloy's EIP-712 encoder) from JSON typed data, not by this file,
+    /// for a vault at a fixed address: one naming a list and a note, one with neither.
     function test_signaturesFromAnotherEncoder_land() public {
-        ICrestVault.SignedGrant memory s = _slip();
-        s.deadline = type(uint40).max;
+        address at = address(uint160(0xC0FFEE));
+        vm.etch(at, address(vault).code);
+        CrestVault v = CrestVault(at);
+        v.initialize(principal, address(usdc), address(0), 0);
+        vm.prank(principal);
+        uint256 parentId = v.grant(ROOT, buyer, _wide(), 0, "");
+        ICrestVault.SignedGrant memory s = ICrestVault.SignedGrant({
+            parent: parentId,
+            controller: sub,
+            caps: ICrestVault.Caps({
+                perSpend: 26_500_000,
+                perPeriod: 53_000_000,
+                lifetime: type(uint128).max,
+                maxOpen: 1,
+                period: 86_400,
+                expiresAt: 1_790_086_400,
+                mayDelegate: false,
+                list: address(0x1157)
+            }),
+            salt: bytes32("cast"),
+            deadline: 1_790_003_600,
+            note: "signed by cast"
+        });
         uint256 snap = vm.snapshotState();
-        vault.grantBySig(
+        v.grantBySig(
             s,
-            hex"a7ee31030f37f66d15d824da0469cd05754a5a9229c187031bac562ad59ce2b4549de60d83d5457fdff909713259de44fc24c5709b44cb2d09fb51ca98eff7cd1c"
+            hex"158b09077210ec4eedcb756e61aa81fa704544504aead67d943bde068eb2e2fe343639c2b64c400d7d5b896b3a8eb4d750b6d8c07a3d20b9cca4ae48df2ea50e1c"
         );
-        assertEq(vault.grantOf(sub), _idOf(s));
+        assertEq(v.grantOf(sub), _idOf(s));
         vm.revertToState(snap);
-        s.counterparties = new bytes32[](0);
-        s.note = "";
-        vault.grantBySig(
+        (s.caps.list, s.note) = (address(0), "");
+        v.grantBySig(
             s,
-            hex"8b0fa705e14862e6b082d7feebab7872430724ec2464fd482eed9e74b165f98250b5cc21231410016a317dc9e76e2bdc746d414aa81bee8db7790d705cbec5771b"
+            hex"0de2c341b706ac75cbf7829e2845889557297a993bf02110de8ad91e943e508a78333f2133a129166eba1a51698999e51d14d9b71d884f8f94a9527d373389ce1c"
         );
-        assertEq(vault.grantOf(sub), _idOf(s));
+        assertEq(v.grantOf(sub), _idOf(s));
     }
 
-    // Gas: the same grant, with one listed counterparty, by a signature and by transactions, each from cold storage.
-    // Each logs its execution gas and its calldata gas, which a transaction adds to its 21,000 base.
+    // Gas: the same grant by a signature and by a transaction, each from cold storage. Each logs its execution gas and
+    // its calldata gas, which a transaction adds to its 21,000 base.
 
     function _calldataGas(bytes memory data) internal pure returns (uint256 gas) {
         for (uint256 i; i < data.length; ++i) {
@@ -563,21 +576,13 @@ contract SignedGrantTest is CrestBase {
         emit log_named_uint("grantBySig, calldata gas", _calldataGas(data));
     }
 
-    function test_gas_aGrantThenAnAllowByTransaction() public {
+    function test_gas_aGrantByTransaction() public {
         ICrestVault.SignedGrant memory s = _slip();
-        bytes memory grantData = abi.encodeCall(vault.grant, (s.parent, s.controller, s.caps, s.salt, s.note));
-        uint256 id = _idOf(s);
-        bytes32 merchant = _merchant();
-        bytes memory allowData = abi.encodeCall(vault.allow, (id, merchant, true, s.note));
+        bytes memory data = abi.encodeCall(vault.grant, (s.parent, s.controller, s.caps, s.salt, s.note));
         vm.prank(buyer);
         uint256 before = gasleft();
         vault.grant(s.parent, s.controller, s.caps, s.salt, s.note);
         emit log_named_uint("grant, execution gas", before - gasleft());
-        vm.prank(buyer);
-        before = gasleft();
-        vault.allow(id, merchant, true, s.note);
-        emit log_named_uint("allow, execution gas", before - gasleft());
-        emit log_named_uint("grant, calldata gas", _calldataGas(grantData));
-        emit log_named_uint("allow, calldata gas", _calldataGas(allowData));
+        emit log_named_uint("grant, calldata gas", _calldataGas(data));
     }
 }

@@ -72,7 +72,7 @@ contract FeeTest is CrestBase {
         vm.startPrank(principal);
         fv.setModule(address(module), module.payee(), "");
         fg = fv.grant(ROOT, buyer, _caps(2 * HOLD, 3 * (HOLD + CREST_FEE), type(uint128).max, 5, true, true), 0, "");
-        fv.allow(fg, _merchant(), true, "");
+        allowList.set(fv, fg, _merchant(), true, "");
         vm.stopPrank();
         usdc.mint(address(fv), 10 * HOLD);
     }
@@ -150,14 +150,11 @@ contract FeeTest is CrestBase {
     }
 
     function test_attack_theFeePassesNoLimitThroughASignedGrant() public {
-        bytes32[] memory merchants = new bytes32[](1);
-        merchants[0] = _merchant();
         ICrestVault.SignedGrant memory s = ICrestVault.SignedGrant({
             parent: fg,
             controller: sub,
-            caps: _caps(HOLD, 2 * HOLD, type(uint128).max, 1, true, false),
+            caps: _caps(HOLD, 2 * HOLD, type(uint128).max, 1, false, false),
             salt: 0,
-            counterparties: merchants,
             deadline: uint40(vm.getBlockTimestamp() + 1 hours),
             note: ""
         });
@@ -263,7 +260,7 @@ contract FeeTest is CrestBase {
         vm.startPrank(principal);
         ov.setModule(address(module), module.payee(), "");
         uint256 og = ov.grant(ROOT, buyer, _caps(2 * HOLD, 10 * HOLD, type(uint128).max, 5, true, true), 0, "");
-        ov.allow(og, _merchant(), true, "");
+        allowList.set(ov, og, _merchant(), true, "");
         vm.stopPrank();
         usdc.mint(address(ov), 2 * HOLD);
         _fundVia(_vterms(address(ov), buyer), BUYER_PK);
@@ -389,7 +386,7 @@ contract FeeTest is CrestBase {
         bytes32 capsHash = keccak256(
             abi.encode(
                 keccak256(
-                    "Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool restricted,bool mayDelegate)"
+                    "Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool mayDelegate,address list)"
                 ),
                 s.caps
             )
@@ -397,13 +394,12 @@ contract FeeTest is CrestBase {
         bytes32 structHash = keccak256(
             abi.encode(
                 keccak256(
-                    "SignedGrant(uint256 parent,address controller,Caps caps,bytes32 salt,bytes32[] counterparties,uint40 deadline,bytes note)Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool restricted,bool mayDelegate)"
+                    "SignedGrant(uint256 parent,address controller,Caps caps,bytes32 salt,uint40 deadline,bytes note)Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool mayDelegate,address list)"
                 ),
                 s.parent,
                 s.controller,
                 capsHash,
                 s.salt,
-                keccak256(abi.encodePacked(s.counterparties)),
                 s.deadline,
                 keccak256(s.note)
             )

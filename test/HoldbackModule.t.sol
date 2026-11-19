@@ -245,7 +245,7 @@ contract HoldbackModuleTest is CrestBase {
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
         vault.setCaps(agentGrant, _wide(), "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.allow(agentGrant, itself, true, "");
+        allowList.set(vault, agentGrant, itself, true, "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
         vault.setModule(address(this), buyer, "");
         vm.stopPrank();

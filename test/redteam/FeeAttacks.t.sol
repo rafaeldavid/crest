@@ -163,7 +163,7 @@ contract RedTeamFeeTest is RedTeamBase {
         vm.startPrank(principal);
         fv.setModule(address(module), module.payee(), "");
         fg = fv.grant(ROOT, buyer, _caps(2 * HOLD, 3 * (HOLD + CREST_FEE), type(uint128).max, 5, true, true), 0, "");
-        fv.allow(fg, _merchant(), true, "");
+        allowList.set(fv, fg, _merchant(), true, "");
         vm.stopPrank();
         usdc.mint(address(fv), 10 * HOLD);
     }

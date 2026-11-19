@@ -72,7 +72,7 @@ contract CrossCheckCoverageTest is RedTeamBase {
         vm.startPrank(principal);
         vault.close(agentGrant, "");
         vault.setCaps(agentGrant, _wide(), "after close");
-        vault.allow(agentGrant, keccak256("anyone"), true, "after close");
+        allowList.set(vault, agentGrant, keccak256("anyone"), true, "after close");
         vault.setPaused(agentGrant, false, "after close");
         vm.stopPrank();
         assertTrue(_grantOf(vault, agentGrant).closed);

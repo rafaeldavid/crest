@@ -108,7 +108,7 @@ contract RedTeamTreeTest is RedTeamBase {
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
         vault.setCaps(agentGrant, _wide(), "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.allow(agentGrant, itself, true, "");
+        allowList.set(vault, agentGrant, itself, true, "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
         vault.grant(agentGrant, newKey, _wide(), 0, "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);

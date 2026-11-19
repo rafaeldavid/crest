@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 
+import {CrestAllowList} from "../../src/CrestAllowList.sol";
 import {CrestFactory} from "../../src/CrestFactory.sol";
 import {CrestVault} from "../../src/CrestVault.sol";
 import {ICrestVault} from "../../src/ICrestVault.sol";
@@ -43,7 +44,7 @@ contract TreeHandler is Test {
             for (; g != 0; g = vault.getGrant(g).parent) {
                 ICrestVault.Grant memory x = vault.getGrant(g);
                 if (amount > x.caps.perSpend) paymentsPastALimit++;
-                if (x.caps.restricted && !listed) paymentsPastALimit++;
+                if (x.caps.list != address(0) && !listed) paymentsPastALimit++;
             }
         } catch {}
     }
@@ -64,6 +65,7 @@ contract TreeHandler is Test {
 /// Whatever the sequence, no grant passes any of its limits, every level counts what passes through it, and no money
 /// leaves the vault except to the pinned payee.
 contract TreeInvariantsTest is Test {
+    CrestAllowList internal allowList;
     uint256 internal constant ROOT = 1;
     uint256 internal constant LOADED = 1_000_000;
     CrestVault internal vault;
@@ -77,6 +79,7 @@ contract TreeInvariantsTest is Test {
     function setUp() public {
         vm.warp(1_790_000_000);
         token = new MockERC3009Token("Mock USDC", "mUSDC", 6);
+        allowList = new CrestAllowList();
         CrestFactory factory = new CrestFactory(0, address(0));
         address principal = makeAddr("principal");
         vault = CrestVault(factory.create(principal, address(token), 0));
@@ -85,7 +88,7 @@ contract TreeInvariantsTest is Test {
         vm.startPrank(principal);
         vault.setModule(address(module), address(module), "");
         agentGrant = vault.grant(ROOT, h.agent(), _caps(100, 300, 1_000, 3, true, true), 0, "");
-        vault.allow(agentGrant, h.LISTED(), true, "");
+        allowList.set(vault, agentGrant, h.LISTED(), true, "");
         vm.stopPrank();
         vm.startPrank(h.agent());
         subAGrant = vault.grant(
@@ -108,9 +111,16 @@ contract TreeInvariantsTest is Test {
         uint32 maxOpen,
         bool restricted,
         bool mayDelegate
-    ) internal pure returns (ICrestVault.Caps memory) {
+    ) internal view returns (ICrestVault.Caps memory) {
         return ICrestVault.Caps(
-            uint128(perSpend), uint128(perPeriod), uint128(lifetime), maxOpen, 1 days, 0, restricted, mayDelegate
+            uint128(perSpend),
+            uint128(perPeriod),
+            uint128(lifetime),
+            maxOpen,
+            1 days,
+            0,
+            mayDelegate,
+            restricted ? address(allowList) : address(0)
         );
     }
 

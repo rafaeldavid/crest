@@ -63,7 +63,7 @@ contract DeployTest is CrestBase {
         vm.startPrank(principal);
         v.setModule(address(m), m.payee(), "the deployed module");
         uint256 g = v.grant(ROOT, buyer, _caps(HOLD, 3 * HOLD, type(uint128).max, 2, true, true), 0, "");
-        v.allow(g, m.counterpartyOf(seller, adjudicator, fallbackAdj, appealAdj), true, "");
+        allowList.set(v, g, m.counterpartyOf(seller, adjudicator, fallbackAdj, appealAdj), true, "");
         vm.stopPrank();
         usdc.mint(address(v), HOLD);
         H.Terms memory t = _vterms(address(v), buyer);
@@ -113,6 +113,8 @@ contract DeployTest is CrestBase {
         assertEq(vm.parseJsonAddress(json, ".factory"), address(f));
         assertEq(vm.parseJsonAddress(json, ".implementation"), f.IMPLEMENTATION());
         assertEq(vm.parseJsonAddress(json, ".holdbackModule"), address(m));
+        assertEq(vm.parseJsonAddress(json, ".allowList"), address(script.allowListAddress()));
+        assertGt(address(script.allowListAddress()).code.length, 0, "the default list is deployed");
         vm.removeFile(path);
     }
 

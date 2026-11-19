@@ -60,7 +60,7 @@ contract CrossCheckVerifyTest is RedTeamBase {
         vm.startPrank(principal);
         child.setPaused(subInChild, true, "");
         child.setCaps(ROOT, narrowed, "");
-        child.allow(ROOT, _merchant(), true, "");
+        allowList.set(child, ROOT, _merchant(), true, "");
         child.close(subInChild, "");
         child.returnToParent(HOLD, "");
         vault.takeBackFromChild(address(child), HOLD, "");
@@ -229,7 +229,14 @@ contract CrossCheckCarryFuzzTest is Test {
 
     function _caps(uint256 period) internal pure returns (ICrestVault.Caps memory) {
         return ICrestVault.Caps(
-            type(uint128).max, type(uint128).max, type(uint128).max, type(uint32).max, uint32(period), 0, false, false
+            type(uint128).max,
+            type(uint128).max,
+            type(uint128).max,
+            type(uint32).max,
+            uint32(period),
+            0,
+            false,
+            address(0)
         );
     }
 

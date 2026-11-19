@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {Script, console2} from "forge-std/Script.sol";
 import {HoldbackRules} from "holdback/HoldbackRules.sol";
 
+import {CrestAllowList} from "../src/CrestAllowList.sol";
 import {CrestFactory} from "../src/CrestFactory.sol";
 import {CrestVault} from "../src/CrestVault.sol";
 import {ICrestFeeSweeper} from "../src/ICrestFeeSweeper.sol";
@@ -69,6 +70,10 @@ contract Deploy is Script {
         if (address(module).code.length == 0 && address(new HoldbackModule{salt: SALT}(rules)) != address(module)) {
             revert CheckFailed("the module is not at its CREATE2 address");
         }
+        CrestAllowList list = allowListAddress();
+        if (address(list).code.length == 0 && address(new CrestAllowList{salt: SALT}()) != address(list)) {
+            revert CheckFailed("the default list is not at its CREATE2 address");
+        }
         vm.stopBroadcast();
         check(factory, module, rules);
     }
@@ -87,6 +92,11 @@ contract Deploy is Script {
             return HoldbackRules(vm.parseJsonAddress(vm.readFile(HOLDBACK_SEPOLIA_RECORD), ".rules"));
         }
         return HoldbackRules(vm.envOr("HOLDBACK_RULES", address(0)));
+    }
+
+    /// @notice Where the default merchant list is, or will be: one per chain, with no owner.
+    function allowListAddress() public pure returns (CrestAllowList) {
+        return CrestAllowList(vm.computeCreate2Address(SALT, keccak256(type(CrestAllowList).creationCode)));
     }
 
     /// @notice The fee the factory fixes for every vault it creates.
@@ -108,6 +118,7 @@ contract Deploy is Script {
     function check(CrestFactory factory, HoldbackModule module, HoldbackRules rules) public view {
         if (address(factory).code.length == 0) revert CheckFailed("no factory at its address");
         if (address(module).code.length == 0) revert CheckFailed("no module at its address");
+        if (address(allowListAddress()).code.length == 0) revert CheckFailed("no default list at its address");
         CrestVault implementation = CrestVault(factory.IMPLEMENTATION());
         if (address(implementation).code.length == 0) revert CheckFailed("the implementation has no code");
         if (implementation.principal() != address(1)) revert CheckFailed("the implementation can be initialized");
@@ -136,6 +147,7 @@ contract Deploy is Script {
         vm.serializeAddress(o, "factory", address(factory));
         vm.serializeAddress(o, "implementation", factory.IMPLEMENTATION());
         vm.serializeAddress(o, "holdbackModule", address(module));
+        vm.serializeAddress(o, "allowList", address(allowListAddress()));
         vm.serializeBytes32(o, "salt", SALT);
         vm.serializeUint(o, "feeBps", CrestVault(factory.IMPLEMENTATION()).FEE_BPS());
         vm.serializeAddress(o, "feeSweeper", CrestVault(factory.IMPLEMENTATION()).FEE_SWEEPER());

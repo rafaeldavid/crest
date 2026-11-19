@@ -137,7 +137,7 @@ contract ReviewRereviewTest is CrestBase {
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
         vault.setCaps(subGrant, _wide(), "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.allow(subGrant, keccak256("anyone"), true, "");
+        allowList.set(vault, subGrant, keccak256("anyone"), true, "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
         vault.close(subGrant, "");
         vm.stopPrank();
