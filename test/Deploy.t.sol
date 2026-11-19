@@ -37,7 +37,7 @@ contract DeployHarness is Deploy {
     }
 
     /// A rate of 0 with no sweeper, whatever the shell's `CREST_FEE_*` say.
-    function feeOf() public pure override returns (uint256, address) {
+    function feeOf() public view virtual override returns (uint256, address) {
         return (0, address(0));
     }
 }

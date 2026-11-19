@@ -288,20 +288,13 @@ contract CrestVault is ICrestVault, EIP712 {
         if (leaf == 0) revert NoGrant();
         if (_opens[commitment].module != address(0)) revert CommitmentOpen();
         uint128 a = _amount(amount);
-        uint128 fee = FEE_BPS == 0 ? 0 : uint128(uint256(a) * FEE_BPS / 10_000);
-        if (uint256(a) + fee > type(uint128).max) revert OverPerSpend(leaf);
-        uint128 total = a + fee;
-        if (FEE_BPS != 0) _requireNoPendingApproval(nonce);
+        uint128 total = FEE_BPS == 0 ? a : _withFee(leaf, a, nonce);
         for (uint256 g = leaf; g != 0; g = _grants[g].parent) {
             _chargeOne(g, total, counterparty, true);
         }
         _opens[commitment] = Open({grant: leaf, amount: a, module: msg.sender});
         if (parent != address(0)) ICrestVault(parent).checkPath(parentGrant, total, counterparty);
-        if (fee != 0) {
-            feeOwed += fee;
-            emit FeeOwed(leaf, fee);
-        }
-        _requireAboveFee(a);
+        if (FEE_BPS != 0) _owe(leaf, a, total - a);
         bytes32 digest = keccak256(
             abi.encodePacked(
                 "\x19\x01",
@@ -504,6 +497,23 @@ contract CrestVault is ICrestVault, EIP712 {
         if (FEE_BPS == 0) return;
         uint256 owed = feeOwed;
         if (owed != 0 && SafeTransferLib.balanceOf(token, address(this)) < amount + owed) revert BalanceBelowFee();
+    }
+
+    /// A payment of `a` with its fee, refused by name when the two would not fit in a `uint128`.
+    function _withFee(uint256 leaf, uint128 a, bytes32 nonce) internal returns (uint128) {
+        uint256 total = uint256(a) + uint256(a) * FEE_BPS / 10_000;
+        if (total > type(uint128).max) revert OverPerSpend(leaf);
+        _requireNoPendingApproval(nonce);
+        return uint128(total);
+    }
+
+    /// Adds a payment's fee to what the vault owes, then refuses the payment if the balance would fall below it.
+    function _owe(uint256 leaf, uint128 a, uint128 fee) internal {
+        if (fee != 0) {
+            feeOwed += fee;
+            emit FeeOwed(leaf, fee);
+        }
+        _requireAboveFee(a);
     }
 
     /// With a fee, refuses a second approval in one transaction while the token has not yet spent the first, so every

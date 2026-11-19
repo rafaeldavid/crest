@@ -59,9 +59,9 @@ import {AuthCaptureEscrow} from "commerce-payments/AuthCaptureEscrow.sol";
 ///      initialized in one transaction by `CrestFactory`.
 interface ICrestVault {
     /// @notice What a grant allows. The largest value of a type means no limit of that kind.
-    /// @param perSpend The most one payment may be, in the token's base units.
+    /// @param perSpend The most one payment and its fee may be, in the token's base units.
     /// @param perPeriod The most the payments of one period may add up to.
-    /// @param lifetime The most this grant may ever pay, child-vault funding included.
+    /// @param lifetime The most this grant may ever pay, fees and child-vault funding included.
     /// @param maxOpen How many commitments may be open at once.
     /// @param period A period's length in seconds; a period is `floor(block.timestamp / period)`, so 86,400 is a UTC
     ///        day. Must not be 0. A new length keeps the spend of the last window paid in if it overlaps the new one.
@@ -253,7 +253,7 @@ interface ICrestVault {
 
     // Payments
 
-    /// @notice An enabled module charges `controller`'s grant and every grant above it with `amount` for
+    /// @notice An enabled module charges `controller`'s grant and every grant above it with `amount` and its fee for
     ///         `counterparty`, opens `commitment` (the venue's own ID for this payment: for Holdback, the deal's
     ///         commitment ID), and has the vault approve one ERC-3009 authorization of exactly
     ///         `amount` to the module's pinned payee, valid before `validBefore`, with `nonce`.
@@ -292,8 +292,8 @@ interface ICrestVault {
     ///         principal.
     function isAbove(address who, uint256 id) external view returns (bool);
 
-    /// @notice Reverts as `charge` would for `amount` and `counterparty` on grant `id`'s path, here and in every
-    ///         ancestor vault, for state, expiry, per-payment limit and allow lists. Counts nothing.
+    /// @notice Reverts as `charge` would for `amount`, its fee included, and `counterparty` on grant `id`'s path,
+    ///         here and in every ancestor vault, for state, expiry, per-payment limit and allow lists. Counts nothing.
     function checkPath(uint256 id, uint256 amount, bytes32 counterparty) external view;
 
     /// @notice Reverts when any grant on `id`'s path, here or in an ancestor vault, is closed, paused or expired, or may

@@ -6,8 +6,8 @@ pragma solidity 0.8.28;
 ///         token and a salt, and child vaults at an address that follows from the parent vault, the child's principal, the
 ///         parent grant and a salt. Anyone may create a vault and pay the gas; the creator gets no role. A second
 ///         creation at the same address returns the vault that is there.
-/// @dev The implementation is deployed by the factory's constructor and can never be initialized. Clones have fixed
-///      code: there is no upgrade.
+/// @dev The implementation is deployed by the factory's constructor, with the fee the factory fixes for every vault it
+///      creates (`FEE_BPS`, `FEE_SWEEPER`), and can never be initialized. Clones have fixed code: there is no upgrade.
 interface ICrestFactory {
     event VaultCreated(address indexed vault, address indexed principal, address indexed token, bytes32 salt);
     event ChildVaultCreated(
