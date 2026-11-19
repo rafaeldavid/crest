@@ -58,7 +58,7 @@ A second venue is a second module; the vault does not change.
 - **A window counts until its end time,** so changing a limit's period never hands the agent a fresh window. A grant keeps the end time of the window it last paid in, and its spend counts in any current window that starts before that end. A new period length only moves the end back to the end of the new current window; it never zeroes the counter, so the spend survives any number of changes. The vault keeps one window's counter, not a history, so a longer period knows only that last window (open item 12).
 - **Every change carries who made it and a note.** Each function a principal or a controller calls takes a `note`, and its event carries it with the caller: a reason, a ticket, or the hash of a document kept elsewhere. Limits changes also carry the previous limits. The note is public, so a reason meant to stay private goes in as a hash.
 - **Periods are fixed windows** (`floor(time / period)`), with no carry-over. A refund does not give a period's limit back: the counters are gross, and the refunded money returns to the vault.
-- **Open commitments are counted, not their total.** The total at risk is already bounded by the count times the per-payment limit. The module that opened a commitment releases it when the venue says it has ended; anyone may ask it to.
+- **Open commitments are counted, not their total.** The count caps commitments open at once from this vault. It does not cap those a child vault pays, since a child's payments check the parent path's state, per-payment limit and lists, and an ended commitment frees its slot. So the bound on money at risk is the period and lifetime limits [measured, `test/redteam/FrontRun.t.sol`]. The module that opened a commitment releases it when the venue says it has ended; anyone may ask it to.
 
 ### 3. Child vaults
 
@@ -79,7 +79,7 @@ A second venue is a second module; the vault does not change.
 ### 5. The Holdback module
 
 - **The buyer is the agent's key; the payer is the vault** (today; section 11 makes the vault the buyer in the next build). The terms name the agent's key as `buyer` and the vault as `buyerPaymentAddress`. The rules contract checks the agent's own agreement; the vault's grant for that key bounds what it may fund.
-- **The counterparty** is the deal's payout address together with its three adjudicators, so a principal approves a merchant and the adjudicators it accepts in one entry. A hold pays out only to the terms' payout address or back to the payer (Holdback, `HoldbackRules.sol:400`) [measured], so the approved-merchant list holds through the escrow.
+- **The counterparty** is the deal's payout address together with its three adjudicators, so a principal approves a merchant and the adjudicators it accepts in one entry. A hold pays out only to the terms' payout address, the deciding adjudicator's fee, or back to the payer (Holdback, `HoldbackRules.sol:416`, `:327` and `:332` at `978aa38d`) [measured], so the approved-merchant list holds through the escrow.
 - **The amount** is the hold: price plus the adjudication fee. Operator fees are not paid through the module; the pilots' fee is 0.
 - **Open deals end** when the rules contract's stage is Released, Refunded or Settled, or the escrow's expiry has passed.
 - **One module per Holdback rules deployment.** After a redeploy the principal enables the new module with one transaction.
@@ -152,12 +152,12 @@ The maintainer: "if an agent uses a vault, the vault admin owner should be the b
 
 The build waits for the first stage of the two-model test (T-560), which runs with the agent's key as the buyer. The same scenarios then rerun with the vault as the buyer, plus new ones where the principal steps in on a funded deal.
 
-**What the vault answers, and to whom.** Holdback's rules contract checks `buyer` through Solady's `SignatureCheckerLib`: ECDSA for an address without code, ERC-1271 for one with code (`HoldbackRules.sol:565-570`). It asks for three things:
-- the agreement (`:183`);
-- an early accept (`:339`);
-- the buyer's signature on a settlement both sides sign (`:377`).
+**What the vault answers, and to whom.** Holdback's rules contract checks `buyer` through Solady's `SignatureCheckerLib`: ECDSA for an address without code, ERC-1271 for one with code (`HoldbackRules.sol:581-587`). It asks for three things:
+- the agreement (`:192`);
+- an early accept (`:355`);
+- the buyer's signature on a settlement both sides sign (`:393`).
 
-So the vault can be the buyer with no change to Holdback's contracts [measured, at the pinned `27ab44e8`].
+So the vault can be the buyer with no change to Holdback's contracts [measured at `contracts-phase-one-2` (`978aa38d`), whose lines are cited here; Sepolia's contracts were deployed from `1adfa55b`, whose `contracts/src` is the same; first measured at `27ab44e8`].
 
 | Who asks | About what | The vault says yes when |
 |---|---|---|
@@ -478,6 +478,49 @@ What was built (`grantBySig`, `cancelSignedGrant`, `SignedGrant`):
     - The red team tried 37 attacks. It found one Medium: a spare slip restarted a stopped sub-agent after the sub-agent closed its own grant. It also found one Low: renewals signed in advance all landed on the first day. Both are fixed by the same rule.
     - The red team's exhaustive table and fuzz found no slip that lands where its signer's `grant` would not.
 
+### 18. An agent that front-runs its principal's stop (answered 2026-11-19; no timelock)
+
+The maintainer asked: "For Crest and spend controls, we may need to add a small timelock for execution to avoid a scenario where an agent front-runs via MEV a transaction to remove agent funds / power".
+
+**No timelock.** A stop only has to land, and what the agent lands ahead of it is bounded by its own period and lifetime limits.
+- **A pause, a close, a narrowing, an unlisting or a module switch-off always lands,** whatever the agent did first. Each checks only who sends it and, for a grant, that the grant exists [measured, `test/redteam/FrontRun.t.sol` section 1; inferred from `CrestVault.sol` `setModule`, `setCaps`, `setPaused` and `close`, and `CrestAllowList.set`].
+- **A stop that names an amount or an ID can go stale and revert,** moving nothing: a withdrawal, a take-back from a child vault, or a cancel of an unused slip [measured, section 6]. A withdrawal sent after a pause holds. A take-back or a cancel can still go stale after one, since a paused agent may still return a child's money to the vault or void its own slip; neither moves money anywhere else [measured, review re-check]. Read the amount again and resend.
+- **No path sends the vault's money to the agent's key** [inferred]. Money leaves a vault only by the principal's withdrawal, a child vault's funding and its return to the parent, the one approval to a module's pinned payee, and the fee to the sweeper. Holdback pays only the seller's payout address, the buyer's payment address and the deciding adjudicator's fee (`HoldbackRules.sol:416`, `:327`, `:332`).
+
+**What the agent can land first, and what is left after the stop** [measured, `test/redteam/FrontRun.t.sol`, 17 tests]:
+
+| The agent lands first | After the stop | The most that leaves the vault |
+| --- | --- | --- |
+| A grant, or a slip it signed, for another key | That key cannot pay or delegate. The agent's unused slips do not land while a pause stands, and land again once it is lifted; after a close they never land | Nothing |
+| A child vault, filled | Neither the agent nor a key it grants there can pay from the child, the agent cannot fill it again, and the principal takes back what is still in it | The period and lifetime limits |
+| Holds, funded, from the vault or from a child vault | Each settles by the deal's terms (below) | The period and lifetime limits, to listed merchants only. The open limit caps holds open at once from one vault, not holds funded: a child vault's holds do not count against the parent grant's open limit, and an ended hold frees its slot |
+| Payments before a narrowing | The new limits bind the agent and every grant below it from the next payment | The old limits, in the period under way |
+| A payment before a stop that names an amount (a withdrawal, a take-back) | That stop reverts and moves nothing | The payment, bounded as above |
+| A slip before its cancel lands | The cancel reverts; a close of the landed grant works | Nothing |
+| A grant to a key the principal's slip names | The slip fails with `KeyNotFresh`; the principal grants the key by transaction | Nothing: a delay only |
+
+**An unlisting or a module switch-off is narrower than a pause.** It stops payments to that merchant, or through that module, from the vault and its child vaults, but the agent can still fill a child vault within its limits. A pause stops both [measured, section 7].
+
+**The worst case: money in holds for an approved merchant.** The maintainer: "oh yes, good model then. Worst case money goes to an approved vendor and can be managed by cancelling the deal / speaking with the vendor?" Only partly, today; fully once the vault is the buyer.
+- **Today, with the agent's key as the buyer:**
+  - **An undelivered hold can come back.** The merchant lets the deal lapse, and anyone returns the hold to the vault at its delivery deadline [measured, section 4; `HoldbackRules.sol:440-447`].
+  - **A cancel before that needs the agent's key.** It is a settlement both sides sign, and Holdback asks for the buyer's signature (`HoldbackRules.sol:393-394`). Holdback never calls the escrow's refund, so a merchant has no refund it can send alone [measured, by reading the rules contract at `978aa38d`].
+  - **A delivered hold is the agent's to release.** After every stop, the agent's key can still accept early any hold whose merchant has signed a delivery. The price then goes to the listed merchant with no judgment, and the deal can no longer lapse or be cancelled [measured, `test_observe_afterEveryStop_theAgentsKeyStillAcceptsADeliveredHoldEarly`; ADR-0041 section 4; `test/redteam/Neutrality.t.sol`]. Speaking with the vendor does not reach that money.
+- **With the vault as the buyer** (section 12) [planned, not built]: the vault refuses a stopped agent's early accept and settlement signature, and the principal signs in its place. So the principal and the merchant can cancel a funded deal without the agent, and a stopped agent cannot release a delivered hold.
+- **Work that passes the deal's terms is paid** by the adjudicator's decision. That is a purchase the agent was allowed to make [documented, Holdback's terms].
+
+**Why a delay does not help** [inferred]:
+- A delay on the agent's payments slows every purchase, against the goal of settling in seconds. The agent's limits already bound any window; a delay moves the window and does not shrink it.
+- A delay on the principal's stop gives the agent more time, not less.
+
+**What a principal should do, in order:**
+1. Set the period and lifetime limits to what it accepts losing to a front-run. They are the bound, through child vaults and early accepts included [measured, sections 3 and 4]. The open limit is not. A front-run that lands across a period boundary gets the rest of one period and the next period's limit [inferred].
+2. Stop with a pause first, of the agent's grant or of the root. From the block it lands nothing more leaves the vault, so a withdrawal sent after it holds [measured, section 6]. Until the vault is the buyer, a delivered hold stays the agent's to accept.
+3. Use the vault as the buyer once it is built (section 12).
+4. Send stops through a private transaction relay where the chain has one, so the agent sees a stop only once it lands [inferred; not tested].
+
+**A second review from another model family** is recommended for this section by the first review, since it records a security decision. It has not run.
+
 ## Open, for the maintainer
 
 1. **The fee** (section 14): decided and built. The sweeper's destination is decided when a fee is switched on. The red team's three questions are decided as built (2026-11-19). Asked "Do you want to keep all three as built?", the maintainer said "Yes, keep all three":
@@ -496,7 +539,7 @@ What was built (`grantBySig`, `cancelSignedGrant`, `SignedGrant`):
 5. **The name:** the first desk search found the name crowded in crypto and finance, with a close use in the same field. The maintainer: "leave as is and we can sort in a second". So the name stays for now, undecided, and spreads no further: no site page, package name, domain or announcement.
 6. **Crow paying to create vaults on request:** a new request field or route; the relay of fundings is decided (section 13).
 7. **Other projects' contracts under Crest** (decided 2026-11-19). The maintainer: "3. Other projects' contracts under Crest: None in the first version". The first version is built on no outside contract that carries an off switch another party holds, or a licence that limits commercial use or forces the same licence. Each later case comes to him.
-8. **Deploys to Sepolia,** on the maintainer's word. They follow Holdback's redeploy of its rules contract (T-563), since the module is per rules deployment, and a bump of `lib/holdback` to the new record.
+8. **Deploys to Sepolia,** on the maintainer's word. Holdback's redeploy of its rules contract (T-563) is done, and `lib/holdback` is pinned to its tag `contracts-phase-one-2` (`978aa38d`), whose record names the new rules contract. The module is per rules deployment.
 9. **Identity notes:** whether to fix a format for identity in a note now (for example a CAIP-19 identifier for an ERC-8004 agent) or when a principal asks.
 10. **Renewals by slip:** a slip signed in advance for later use would need a `validAfter` beside its deadline. Today a slip is usable from the moment it is signed, and a key takes only one. Whether renewals by slip are wanted is the maintainer's to decide. A per-signer nonce that voids all of a signer's slips at once was weighed against the fresh-key rule and is weaker, because the principal must remember to use it.
 11. **Controller keys:** guidance on a long-lived public key per agent against a fresh key per deal or session.
