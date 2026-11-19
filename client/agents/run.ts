@@ -141,7 +141,7 @@ try {
     };
     const agent = agentOf('agent');
     const merchant = await principal.counterparty(w.seller.address, adj);
-    const periodSec = Number(flag("period", buyerSide === "scripted" ? "120" : "1800"));
+    const periodSec = Number(flag("period", buyerSide === "scripted" ? "120" : "900"));
     const caps = s.caps(H, periodSec);
     const { allowMerchant, ...grantCaps } = caps;
     const grant = await principal.grant(agent.address, grantCaps as Caps, { why: `scenario ${s.n}` });
