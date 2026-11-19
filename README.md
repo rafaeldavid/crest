@@ -9,6 +9,8 @@ Crest knows how to pay; it knows nothing of what it pays for. A module per venue
 **State:** design and first build, on test networks only. No real money. Not audited: unreviewed.
 
 **Deployed on Sepolia, a test network, since 2026-11-19.** The addresses are in `deployments/11155111.json`. Its Holdback module pays holds in the Holdback rules contract that record names. Nowhere else.
+- **No fee.** The factory charges a rate of 0 and names no sweeper (address 0), so no fee can ever be owed. A factory with a real rate needs the maintainer's sweeper address first, and is a new factory at a new address. `verify()` for this one runs with `CREST_FEE_BPS` and `CREST_FEE_SWEEPER` unset.
+- **A known limit of this version.** The agent's key is the deal's buyer, and the vault only pays. So after every stop (a pause, a close, an empty vault), that key can still accept early a funded hold whose merchant has signed a delivery. A stop prevents new payments; it does not reach a deal already funded. The vault-as-buyer build closes this limit. It ships as a new factory.
 
 - `docs/design.md`: the design record and the decisions still open.
 - `docs/research/`: the research behind it.
