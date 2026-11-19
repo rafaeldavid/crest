@@ -120,6 +120,7 @@ try {
     if (p === '/' || p === '/index.html') return send(200, 'text/html; charset=utf-8', docs.home);
     if (p === '/llms.txt') return send(200, 'text/plain; charset=utf-8', docs.guide);
     if (p === '/pay-through-a-vault.txt') return send(200, 'text/plain; charset=utf-8', PAGE);
+    if (p === '/reference.txt' && docs.pages['reference.txt']) return send(200, 'text/plain; charset=utf-8', docs.pages['reference.txt']);
     if (Object.hasOwn(docs.pages, p.slice(1))) return send(200, 'text/plain; charset=utf-8', docs.pages[p.slice(1)]);
     return send(404, 'text/html; charset=utf-8', docs.notFound);
   });
@@ -207,7 +208,7 @@ try {
       const sellerPage = w.seller.base;
       const allow = [
         ...w.operators.map((u) => ({ origin: new URL(u).origin })),
-        { origin: webUrl, paths: ['/llms.txt', '/buy.txt', '/pay-through-a-vault.txt', '/ref/'] },
+        { origin: webUrl, paths: ['/llms.txt', '/buy.txt', '/pay-through-a-vault.txt', '/ref/', '/reference.txt'] },
         { origin: new URL(sellerPage).origin, paths: [new URL(sellerPage).pathname, `${new URL(sellerPage).pathname}/agent.json`, `${new URL(sellerPage).pathname}/defaults`] },
         { origin: CROW_SITE },
       ];
@@ -226,6 +227,7 @@ try {
               long: (a: string[]) => a[0] === 'approve' || a[0] === 'resume',
               check: async (a: string[], fence: J) => {
                 const dec = /^[0-9]{1,30}$/, id = /^0x[0-9a-fA-F]{64}$/;
+                if (a.length === 1 && (a[0] === '--help' || a[0] === '-h')) return ['--help'];
                 if (a[0] === 'limits') { if (a.length !== 1) throw new Error('usage: vault-buy limits'); return a; }
                 if (a[0] === 'resume') { if (a.length > 2 || (a[1] !== undefined && !id.test(a[1]))) throw new Error('usage: vault-buy resume [<commitment ID>]'); return a; }
                 if (a[0] === 'approve') {

@@ -2,6 +2,8 @@
 
 State: a draft for test runs on a local chain. Test tokens only. Crest is unreviewed.
 
+Use `vault-buy` where Crow's buy guide says `buy.mjs`: it is the same quote, check and approval, with the vault paying.
+
 Your company keeps its money in a Crest vault: a contract it controls. Your key holds a grant in that vault: limits your principal set. When you buy on Crow, your key is the buyer and signs the agreement; the vault pays the hold, and only within your grant and every grant above it. Your key holds no money. A helper pays the gas.
 
 ## Buy
@@ -10,7 +12,7 @@ Your company keeps its money in a Crest vault: a contract it controls. Your key 
    It asks the seller for an offer that names the vault as the payment address, reads the offer from every Crow operator, and asks the vault in a dry run whether your limits allow it. It stops with exit 3 before anything is signed or paid, and prints the approve line.
 2. Approve: `vault-buy approve <commitment ID> <the most you pay>`
    Your company's policy answers the approval. The vault checks your limits again in the same transaction that pays. Then the command follows the deal to its outcome and prints the work.
-3. Check the work against the terms with `check-delivery` if you need to. Keep a record with `deal-record`.
+3. The command has already checked the work against the terms. To check it again yourself: write the terms and the work to two files, then `check-delivery <terms.json> <work file>`. Keep a record with `deal-record <commitment ID> --as buyer`.
 
 `vault-buy limits` shows your grant, every grant above it, what is used, and the vault's balance. Read it before a purchase you are unsure about.
 
