@@ -7,7 +7,9 @@ import {CrestBase} from "./CrestBase.sol";
 /// any other selector reverts with any calldata from any caller.
 contract SelectorsTest is CrestBase {
     function test_theVaultsFunctions_areExactlyTheReviewedList() public view {
-        string[38] memory want = [
+        string[42] memory want = [
+            "FEE_BPS()",
+            "FEE_SWEEPER()",
             "ROOT()",
             "acceptPrincipal(bytes)",
             "allow(uint256,bytes32,bool,bytes)",
@@ -18,10 +20,12 @@ contract SelectorsTest is CrestBase {
             "checkDelegable(uint256)",
             "checkPath(uint256,uint256,bytes32)",
             "close(uint256,bytes)",
+            "collectFee()",
             "createChild(uint256,bytes32,bytes)",
             "eip712Domain()",
             "endCommitment(bytes32)",
             "factory()",
+            "feeOwed()",
             "fundChild(address,uint256,bytes)",
             "getGrant(uint256)",
             "getOpen(bytes32)",

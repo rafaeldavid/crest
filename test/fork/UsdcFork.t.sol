@@ -48,7 +48,7 @@ contract UsdcForkTest is Test {
         uint256 at = vm.envOr("CREST_FORK_BLOCK", uint256(0));
         if (at == 0) vm.createSelectFork(url);
         else vm.createSelectFork(url, at);
-        CrestFactory factory = new CrestFactory();
+        CrestFactory factory = new CrestFactory(0, address(0));
         vault = CrestVault(factory.create(principal, USDC, 0));
         module = new PayModule(USDC);
         vm.startPrank(principal);

@@ -75,7 +75,11 @@ contract DeployTest is CrestBase {
     /// A deploy that stopped after the factory: the rerun creates only the module.
     function test_aRerunAfterAPartialDeploy_createsOnlyWhatIsMissing() public {
         (CrestFactory pf, HoldbackModule pm) = script.addresses(rules);
-        (bool ok,) = CREATE2_FACTORY.call(abi.encodePacked(keccak256("crest v01"), type(CrestFactory).creationCode));
+        (bool ok,) = CREATE2_FACTORY.call(
+            abi.encodePacked(
+                keccak256("crest v01"), type(CrestFactory).creationCode, abi.encode(uint256(0), address(0))
+            )
+        );
         assertTrue(ok);
         assertGt(address(pf).code.length, 0);
         assertEq(address(pm).code.length, 0);
