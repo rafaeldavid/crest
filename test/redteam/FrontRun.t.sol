@@ -270,7 +270,8 @@ contract RedTeamFrontRunTest is RedTeamBase {
 
     /// From review test B. With a merchant that delivers at once, the agent accepts one hold early, ends it with the
     /// module's `close` (anyone may call it), and funds a third, all ahead of a pause. The open limit caps holds open at
-    /// once, not holds funded: more than two holds' worth leaves, and the period limit stops the next one.
+    /// once, not holds funded: more than two holds' worth leaves. The test then raises the open limit to ten, so the
+    /// period limit is what refuses the next one.
     function test_attack_reusingSlotsByAcceptingEarly_stopsAtThePeriodLimit() public {
         uint256 before = usdc.balanceOf(address(vault));
         H.Terms memory t1 = _vterms(address(vault), buyer);

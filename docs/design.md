@@ -79,7 +79,7 @@ A second venue is a second module; the vault does not change.
 ### 5. The Holdback module
 
 - **The buyer is the agent's key; the payer is the vault** (today; section 11 makes the vault the buyer in the next build). The terms name the agent's key as `buyer` and the vault as `buyerPaymentAddress`. The rules contract checks the agent's own agreement; the vault's grant for that key bounds what it may fund.
-- **The counterparty** is the deal's payout address together with its three adjudicators, so a principal approves a merchant and the adjudicators it accepts in one entry. A hold pays out only to the terms' payout address or back to the payer (Holdback, `HoldbackRules.sol:416` at `978aa38d`) [measured], so the approved-merchant list holds through the escrow.
+- **The counterparty** is the deal's payout address together with its three adjudicators, so a principal approves a merchant and the adjudicators it accepts in one entry. A hold pays out only to the terms' payout address, the deciding adjudicator's fee, or back to the payer (Holdback, `HoldbackRules.sol:416`, `:327` and `:332` at `978aa38d`) [measured], so the approved-merchant list holds through the escrow.
 - **The amount** is the hold: price plus the adjudication fee. Operator fees are not paid through the module; the pilots' fee is 0.
 - **Open deals end** when the rules contract's stage is Released, Refunded or Settled, or the escrow's expiry has passed.
 - **One module per Holdback rules deployment.** After a redeploy the principal enables the new module with one transaction.
@@ -483,8 +483,8 @@ What was built (`grantBySig`, `cancelSignedGrant`, `SignedGrant`):
 The maintainer asked: "For Crest and spend controls, we may need to add a small timelock for execution to avoid a scenario where an agent front-runs via MEV a transaction to remove agent funds / power".
 
 **No timelock.** A stop only has to land, and what the agent lands ahead of it is bounded by its own period and lifetime limits.
-- **A pause, a close, a narrowing, an unlisting or a module switch-off always lands,** whatever the agent did first. Each checks only who sends it and that the grant exists [measured, `test/redteam/FrontRun.t.sol` section 1; inferred from `CrestVault.sol` `setModule`, `setCaps`, `setPaused` and `close`, and `CrestAllowList.set`].
-- **A stop that names an amount or an ID can go stale and revert,** moving nothing: a withdrawal, a take-back from a child vault, or a cancel of an unused slip. Pause first, then send it [measured, section 6].
+- **A pause, a close, a narrowing, an unlisting or a module switch-off always lands,** whatever the agent did first. Each checks only who sends it and, for a grant, that the grant exists [measured, `test/redteam/FrontRun.t.sol` section 1; inferred from `CrestVault.sol` `setModule`, `setCaps`, `setPaused` and `close`, and `CrestAllowList.set`].
+- **A stop that names an amount or an ID can go stale and revert,** moving nothing: a withdrawal, a take-back from a child vault, or a cancel of an unused slip [measured, section 6]. A withdrawal sent after a pause holds. A take-back or a cancel can still go stale after one, since a paused agent may still return a child's money to the vault or void its own slip; neither moves money anywhere else [measured, review re-check]. Read the amount again and resend.
 - **No path sends the vault's money to the agent's key** [inferred]. Money leaves a vault only by the principal's withdrawal, a child vault's funding and its return to the parent, the one approval to a module's pinned payee, and the fee to the sweeper. Holdback pays only the seller's payout address, the buyer's payment address and the deciding adjudicator's fee (`HoldbackRules.sol:416`, `:327`, `:332`).
 
 **What the agent can land first, and what is left after the stop** [measured, `test/redteam/FrontRun.t.sol`, 17 tests]:
@@ -514,8 +514,8 @@ The maintainer asked: "For Crest and spend controls, we may need to add a small 
 - A delay on the principal's stop gives the agent more time, not less.
 
 **What a principal should do, in order:**
-1. Set the period and lifetime limits to what it accepts losing to a front-run. They are the bound, through child vaults and early accepts included [measured, sections 3 and 4]. The open limit is not.
-2. Stop with a pause first, of the agent's grant or of the root. From the block it lands nothing more leaves the vault, so a withdrawal, a take-back or a cancel sent after it holds [measured, section 6]. Until the vault is the buyer, a delivered hold stays the agent's to accept.
+1. Set the period and lifetime limits to what it accepts losing to a front-run. They are the bound, through child vaults and early accepts included [measured, sections 3 and 4]. The open limit is not. A front-run that lands across a period boundary gets the rest of one period and the next period's limit [inferred].
+2. Stop with a pause first, of the agent's grant or of the root. From the block it lands nothing more leaves the vault, so a withdrawal sent after it holds [measured, section 6]. Until the vault is the buyer, a delivered hold stays the agent's to accept.
 3. Use the vault as the buyer once it is built (section 12).
 4. Send stops through a private transaction relay where the chain has one, so the agent sees a stop only once it lands [inferred; not tested].
 
