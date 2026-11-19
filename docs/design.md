@@ -370,7 +370,19 @@ Gas: the pull request reports a payment's cost with the external check against t
 - **Measured (2026-11-19), each call from cold storage.**
   - A list's answer costs 12,071 gas for the default list and 17,843 for a list that makes one call to a registry and two reads there, as an identity-based list would. The cap of 30,000 leaves room for the second.
   - A funding through the module costs 429,148 execution gas with the old in-vault list. Through the default list it costs 437,127 (7,979 more), and through the registry-reading list 442,830.
-  - The six contract files go from 1,099 to 1,098 lines (`CrestVault.sol` 512, `ICrestVault.sol` 326). `CrestAllowList.sol` (23) and `ICrestAllowList.sol` (21) are new, so with the sweeper's two files the ten hold 1,191.
+  - With the fee's fixes merged in and the gas guard, the six contract files hold 1,140 lines (`CrestVault.sol` 549, `ICrestVault.sol` 331). `CrestAllowList.sol` (23) and `ICrestAllowList.sol` (21) are new, so with the sweeper's two files the ten hold 1,234.
+
+- **The caller's gas never changes a list's answer.** A payment sent with too little gas left to give a list its whole 30,000 is refused with `ListGasTooLow` before the list is asked. Without that check, the red team's one Medium: in a child vault, an agent sending just enough gas could let a list that refuses with its full cap run a few hundred gas short and answer yes, and the payment landed. The guard closes it, with the red team's tests.
+- **Five answers, for the coordinator's questions.** Each is tested in `test/redteam/ListRedTeam.t.sol` [measured].
+  1. **Who changes the default list's entries.** Only someone the vault reports as strictly above the grant. A sub-agent or its controller can never widen a list that a parent's grant or a slip points to.
+  2. **A slip's list changed after signing.** A narrowing binds at the next payment. A widening never pays beyond what the signer could pay by transaction at that moment, because the path is checked at payment.
+  3. **A slip naming a list its signer does not control.** That list's controller decides whom the grant may pay, always within every limit and list above it. It is the signer's risk, and `SignedGrant`'s description says so.
+  4. **The gas cap.** The default list's answer from cold storage takes 2,650 gas inside the call. A list that needs 29,953 gas pays; one that needs 30,015 is refused. A payment without gas for the whole cap is refused by name.
+  5. **No code, self-destruct, a proxy.** An address with no code is a no. A list that is destroyed, replaced, upgraded behind a proxy, or given code by EIP-7702 is asked as it is at payment, always within the signer's limits.
+- **Recorded, by design.**
+  - **A slip that names the default list pays no one until someone lists a merchant for it by transaction.** Its signer is not yet above a grant that does not exist; the principal can list for it. It fails closed.
+  - **A list entry stays after its writer loses authority,** after a close or a handover, as the old in-vault list's did.
+  - **An address with no code refuses only until it has code.**
 
 Scope: the default list and its interface are two more files for the outside review.
 
@@ -468,10 +480,12 @@ What was built (`grantBySig`, `cancelSignedGrant`, `SignedGrant`):
 
 ## Open, for the maintainer
 
-1. **The fee** (section 14): decided and built. The sweeper's destination is decided when a fee is switched on. Three questions from the red team, each recommended as built:
-    - **A refunded or reclaimed hold keeps its fee owed.** Recommended: keep it. A refund of the fee needs per-commitment fee records, and the rate is 0 now.
-    - **The fee is owed only on payments through a module.** A withdrawal owes none, and a payment too small for the rate to reach 1 base unit owes 0. Recommended: keep it.
-    - **`collectFee` pays all that is owed or nothing.** The vault's checks keep the balance at or above what it owes. Recommended: keep it.
+1. **The fee** (section 14): decided and built. The sweeper's destination is decided when a fee is switched on. The red team's three questions are decided as built (2026-11-19). Asked "Do you want to keep all three as built?", the maintainer said "Yes, keep all three":
+    - a refunded or reclaimed hold keeps its fee owed;
+    - the fee is owed only on payments through a module, so a withdrawal owes none and a payment too small for the rate to reach 1 base unit owes 0;
+    - `collectFee` pays all that is owed or nothing.
+
+    **To raise before any factory with a non-zero rate:** the first is the one real product choice once a rate is above 0, because a buyer whose hold is refunded still pays the fee. A new factory is the moment to revisit it.
 2. **The external merchant list** (section 15): decided and built.
 3. **Grants by signature** (section 17): decided and built, shape (a).
 4. **Holdback's side of the vault as the buyer** (section 12):

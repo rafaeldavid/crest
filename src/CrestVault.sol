@@ -524,9 +524,11 @@ contract CrestVault is ICrestVault, EIP712 {
         }
     }
 
-    /// Asks `list`, read-only and with at most `LIST_GAS`, whether grant `id` may pay `counterparty`. Only the exact
-    /// magic answer is a yes: a revert, running out of gas, no code, or any other answer is a no.
+    /// Asks `list`, read-only and with `LIST_GAS`, whether grant `id` may pay `counterparty`. Only the exact magic
+    /// answer is a yes: a revert, running out of gas, no code, or any other answer is a no. A call that could not give
+    /// the list its whole `LIST_GAS` (after the 63/64 rule) is refused, so the caller's gas never changes the answer.
     function _listAllows(address list, uint256 id, bytes32 counterparty) internal view returns (bool) {
+        if (gasleft() < LIST_GAS * 64 / 63 + 4000) revert ListGasTooLow();
         (bool ok, bytes memory answer) =
             list.staticcall{gas: LIST_GAS}(abi.encodeCall(ICrestList.allows, (address(this), id, counterparty)));
         return ok && answer.length == 32 && bytes32(answer) == bytes32(ICrestList.allows.selector);

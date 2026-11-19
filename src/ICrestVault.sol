@@ -95,7 +95,9 @@ interface ICrestVault {
         uint32 open;
     }
 
-    /// @notice A grant signed off chain: `grant`'s arguments and the last instant (unix seconds) it may be submitted.
+    /// @notice A grant signed off chain: `grant`'s arguments and the last instant (unix seconds) it may be submitted. A
+    ///         slip fixes its list's address, not that list's answers: whoever controls the list decides whom the grant
+    ///         may pay, always within every limit and list above it. A list someone else controls is the signer's risk.
     struct SignedGrant {
         uint256 parent;
         address controller;
@@ -164,6 +166,7 @@ interface ICrestVault {
     error OverLifetime(uint256 grant);
     error TooManyOpen(uint256 grant);
     error CounterpartyNotAllowed(uint256 grant);
+    error ListGasTooLow();
     error BadGrantSignature();
     error KeyNotFresh();
     error InvalidFee();
@@ -288,7 +291,7 @@ interface ICrestVault {
     function isAbove(address who, uint256 id) external view returns (bool);
 
     /// @notice Reverts as `charge` would for `amount`, its fee included, and `counterparty` on grant `id`'s path,
-    ///         here and in every ancestor vault, for state, expiry, per-payment limit and allow lists. Counts nothing.
+    ///         here and in every ancestor vault, for state, expiry, per-payment limit and lists. Counts nothing.
     function checkPath(uint256 id, uint256 amount, bytes32 counterparty) external view;
 
     /// @notice Reverts when any grant on `id`'s path, here or in an ancestor vault, is closed, paused or expired, or may
@@ -316,7 +319,8 @@ interface ICrestVault {
 /// @notice The merchant list a grant names. The vault asks it read-only, under a fixed gas cap, at every payment.
 interface ICrestList {
     /// @notice Whether `vault`'s grant `grant` may pay `counterparty`. Only this function's selector is a yes; a
-    ///         revert, running out of gas or any other answer is a no.
+    ///         revert, running out of gas, an address with no code or any other answer is a no. A payment sent with too
+    ///         little gas to give the list its whole cap is refused with `ListGasTooLow`.
     function allows(address vault, uint256 grant, bytes32 counterparty) external view returns (bytes4);
 }
 
