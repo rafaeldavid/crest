@@ -30,10 +30,12 @@ abstract contract ChainGuardBase is Test {
 /// `CREST_FORK_URL`: a fork of Sepolia. The script runs as forge runs it: `run` deploys against the rules contract in
 /// Holdback's pinned record, a rerun deploys nothing, and `verify` records Sepolia and the CREATE2 addresses.
 contract DeployOnSepoliaTest is ChainGuardBase {
-    HoldbackRules internal constant RULES = HoldbackRules(0x3BE45128565ABBc35DbD4660716b703Ff489f1b4);
+    HoldbackRules internal RULES;
 
     function setUp() public {
         _forkOrSkip("CREST_FORK_URL");
+        RULES =
+            HoldbackRules(vm.parseJsonAddress(vm.readFile("lib/holdback/contracts/deployments/sepolia.json"), ".rules"));
     }
 
     function test_onSepolia_runDeploys_rerunIsANoop_andVerifyRecordsIt() public {
@@ -74,7 +76,7 @@ contract DeployOnChainOneTest is ChainGuardBase {
         vm.expectRevert(abi.encodeWithSelector(Deploy.NotATestNetwork.selector, 1));
         script.run();
         vm.expectRevert(abi.encodeWithSelector(Deploy.NotATestNetwork.selector, 1));
-        script.deploy(HoldbackRules(0x3BE45128565ABBc35DbD4660716b703Ff489f1b4));
+        script.deploy(HoldbackRules(makeAddr("Sepolia's rules contract")));
         vm.expectRevert(abi.encodeWithSelector(Deploy.NotATestNetwork.selector, 1));
         script.verify();
     }

@@ -16,8 +16,8 @@ import {CrestBase} from "../CrestBase.sol";
 /// collector and test token, checks itself, and a vault from it pays one deal inside its caps to Released and is
 /// refused one above them. Runs only when `CREST_FORK_URL` names a Sepolia RPC; skipped otherwise, as in CI.
 contract SepoliaForkTest is CrestBase {
-    HoldbackRules internal constant SEPOLIA_RULES = HoldbackRules(0x3BE45128565ABBc35DbD4660716b703Ff489f1b4);
-    address internal constant SEPOLIA_TOKEN = 0x0b3d947f594B59Fc1Fb7D02E62C6795F8118cA6D;
+    /// Holdback's own record of its Sepolia deployment, at the commit the submodule pins.
+    string internal constant RECORD = "lib/holdback/contracts/deployments/sepolia.json";
 
     function setUp() public override {
         string memory url = vm.envOr("CREST_FORK_URL", string(""));
@@ -39,9 +39,10 @@ contract SepoliaForkTest is CrestBase {
         for (uint256 i; i < keys.length; ++i) {
             vm.etch(keys[i], "");
         }
-        rules = SEPOLIA_RULES;
+        string memory record = vm.readFile(RECORD);
+        rules = HoldbackRules(vm.parseJsonAddress(record, ".rules"));
         escrow = AuthCaptureEscrow(rules.ESCROW());
-        usdc = MockERC3009Token(SEPOLIA_TOKEN);
+        usdc = MockERC3009Token(vm.parseJsonAddress(record, ".token.address"));
         (factory, module) = new Deploy().deploy(rules);
         vault = CrestVault(factory.create(principal, address(usdc), bytes32("sepolia fork")));
         vm.startPrank(principal);
