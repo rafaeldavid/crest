@@ -38,6 +38,6 @@ contract PayModule {
     }
 
     function end(ICrestVault vault, bytes32 commitment) external {
-        vault.release(commitment);
+        vault.endCommitment(commitment);
     }
 }

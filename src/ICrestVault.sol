@@ -104,7 +104,7 @@ interface ICrestVault {
     event Charged(
         uint256 indexed grant, bytes32 indexed commitment, address indexed module, uint256 amount, bytes32 counterparty
     );
-    event Released(uint256 indexed grant, bytes32 indexed commitment, uint256 amount);
+    event CommitmentEnded(uint256 indexed grant, bytes32 indexed commitment, uint256 amount);
     event ChildCreated(address indexed child, uint256 indexed grant, address indexed principal, address by, bytes note);
     event ChildFunded(address indexed child, uint256 indexed grant, uint256 amount, address indexed by, bytes note);
     event ChildTakenBack(address indexed child, uint256 indexed grant, uint256 amount, address indexed by, bytes note);
@@ -209,7 +209,8 @@ interface ICrestVault {
     // Payments
 
     /// @notice An enabled module charges `controller`'s grant and every grant above it with `amount` for
-    ///         `counterparty`, opens `commitment`, and has the vault approve one ERC-3009 authorization of exactly
+    ///         `counterparty`, opens `commitment` (the venue's own ID for this payment: for Holdback, the deal's
+    ///         commitment ID), and has the vault approve one ERC-3009 authorization of exactly
     ///         `amount` to the module's pinned payee, valid before `validBefore`, with `nonce`.
     function charge(
         address controller,
@@ -222,7 +223,7 @@ interface ICrestVault {
 
     /// @notice The module that opened `commitment` says it has ended: the open counts fall at every level. What was
     ///         spent stays counted.
-    function release(bytes32 commitment) external;
+    function endCommitment(bytes32 commitment) external;
 
     /// @notice Anyone has the vault call `reclaim` on the Commerce Payments escrow an enabled `module` names, for a
     ///         payment this vault paid. The escrow allows it only to the payer and only after its own expiry, and

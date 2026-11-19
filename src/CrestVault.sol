@@ -263,14 +263,14 @@ contract CrestVault is ICrestVault {
     }
 
     /// @inheritdoc ICrestVault
-    function release(bytes32 commitment) external {
+    function endCommitment(bytes32 commitment) external {
         Open memory o = _opens[commitment];
         if (o.module == address(0) || o.module != msg.sender) revert NotOpen();
         delete _opens[commitment];
         for (uint256 g = o.grant; g != 0; g = _grants[g].parent) {
             _grants[g].open -= 1;
         }
-        emit Released(o.grant, commitment, o.amount);
+        emit CommitmentEnded(o.grant, commitment, o.amount);
     }
 
     /// @inheritdoc ICrestVault

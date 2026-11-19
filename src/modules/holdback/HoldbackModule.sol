@@ -54,7 +54,7 @@ contract HoldbackModule is IHoldbackModule, ICrestEscrowModule {
         bool ended = s == IHoldbackRules.Stage.Released || s == IHoldbackRules.Stage.Refunded
             || s == IHoldbackRules.Stage.Settled;
         if (!ended && block.timestamp < _expiry(t)) revert NotEnded();
-        ICrestVault(t.buyerPaymentAddress).release(id);
+        ICrestVault(t.buyerPaymentAddress).endCommitment(id);
     }
 
     /// @inheritdoc IHoldbackModule

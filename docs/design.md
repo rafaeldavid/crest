@@ -103,6 +103,14 @@ No principal, controller, module or factory can stop a funded deal from settling
 
 For each control, an attempt to break it that fails: a payment over each limit at the grant and at each ancestor; a wider child; siblings that together pass their parent; an unlisted counterparty at any level; after a stop at any level; an expired grant; a controller widening or resuming itself; a stranger or an agent withdrawing, enabling a module or granting; a module not enabled; a payee other than the pinned one; a commitment opened or released twice; a failed venue call after a charge (nothing counted); the approval used twice or asked by a caller that is not the token; the period boundary; a child vault paying past its parent's stop, expiry, per-payment limit or list; a child sending money anywhere but up; a Holdback funding sent straight to the rules contract for a vault-paid deal; and the principal emptying the vault after a funding while the deal still settles.
 
+### 10. Identity and reputation standards: addresses are the keys
+
+A research pass on 2026-11-19 read the agent identity and reputation standards: ERC-8004 (Trustless Agents: identity, reputation and validation registries, Draft, deployed on Ethereum and Sepolia), ERC-8183 (agentic commerce jobs, Draft), ERC-7710 and ERC-7715 (delegations, Draft), ERC-6551, ERC-8196, x402, A2A and AP2. Crest is compatible with them as built, and needs no contract change [measured on a fork of Sepolia: 11 of 11 scratch tests].
+- **A grant's controller can be a registered agent's wallet,** so `grantOf(agentWallet)` finds an ERC-8004 agent's grant. A vault itself cannot be an agent wallet [measured].
+- **Identity goes in a note, not in storage.** A principal that wants a grant tied to an agent identity puts it in the grant's note (for example an ERC-8004 agent ID); `Granted` carries it, at about 2,000 gas against 22,100 for a stored field [measured].
+- **No payment reads a registry.** The ERC-8004 registries are upgradeable and controlled by one outside key [measured], so a payment that read them would let that key change who is paid. Approved merchants stay payout addresses, which Holdback's terms enforce.
+- **Crest emits no reputation or validation records.** A reputation system can read Crest's events and Holdback's deal outcomes by the commitment ID; Crest stays a wallet.
+
 ## Open, for the maintainer
 
 1. **The vault as the buyer,** so the principal can step in on a funded deal: it needs Holdback's operators to read a contract buyer (Holdback T-227) and narrows Holdback's ADR-0038 rule that a revocation never touches a funded deal.
@@ -113,5 +121,8 @@ For each control, an attempt to break it that fails: a payment over each limit a
 6. **Depending on third-party code a single address can pause, or under copyleft or source-available licences:** none in the first version.
 7. **A trademark search for the name** before any public use.
 8. **Deploys to Sepolia,** on the maintainer's word.
+9. **Identity notes:** whether to fix a format for identity in a note now (for example a CAIP-19 identifier for an ERC-8004 agent) or when a principal asks.
+10. **An identity-following merchant list:** whether an opt-in module may ever approve merchants by agent identity, given that one outside key controls the registries.
+11. **Controller keys:** guidance on a long-lived public key per agent against a fresh key per deal or session.
 
 The repository's visibility is settled: public since 2026-11-19, with secret scanning, push protection, private vulnerability reporting, and a rule on `main` that takes changes only by pull request with both checks passing.

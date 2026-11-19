@@ -292,7 +292,7 @@ contract HoldbackModuleTest is CrestBase {
         H.Terms memory t = _vterms(address(vault), buyer);
         bytes32 id = _fundVia(t, BUYER_PK);
         vm.expectRevert(ICrestVault.NotOpen.selector);
-        vault.release(id);
+        vault.endCommitment(id);
     }
 
     // Neutrality: nothing the principal does reaches money held for a deal.
