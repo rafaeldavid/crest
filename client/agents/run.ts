@@ -257,7 +257,9 @@ try {
       clearTimeout(timer);
       const events = rec.events.slice(from);
       const lines = events.filter((e: J) => e.kind === 'command' && e.command === 'vault-buy').flatMap((e: J) => String(e.stdout ?? '').split('\n')).map((l: string) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-      const outcome = [...lines].reverse().find((x: J) => typeof x.outcome === 'string' || typeof x.refused === 'string');
+      // The vault refuses either at the quote's dry run (the agent then stops, as the page says) or at the funding.
+      const dryRun = [...lines].reverse().find((x: J) => x?.vault?.check?.allows === false);
+      const outcome = [...lines].reverse().find((x: J) => typeof x.outcome === 'string' || typeof x.refused === 'string') ?? (dryRun ? { refused: dryRun.vault.check.refused, said: dryRun.vault.check.said, commitmentId: dryRun.commitmentId, atDryRun: true } : undefined);
       const gotRaw = !outcome ? 'no purchase' : outcome.outcome ? String(outcome.outcome) : `refused ${outcome.refused}`;
       const got = /refused .*(Balance|Insufficient|exceeds balance)/i.test(gotRaw) ? 'refused insufficient balance' : gotRaw;
       const turns = events.filter((e: J) => e.kind === 'model.turn');
