@@ -6,6 +6,7 @@ import {HoldbackRules} from "holdback/HoldbackRules.sol";
 
 import {CrestFactory} from "../src/CrestFactory.sol";
 import {CrestVault} from "../src/CrestVault.sol";
+import {ICrestFeeSweeper} from "../src/ICrestFeeSweeper.sol";
 import {HoldbackModule} from "../src/modules/holdback/HoldbackModule.sol";
 
 /// @title Deploy
@@ -50,6 +51,13 @@ contract Deploy is Script {
         }
         (uint256 feeBps, address feeSweeper) = feeOf();
         if (feeBps != 0 && feeSweeper.code.length == 0) revert CheckFailed("a fee needs a sweeper contract");
+        if (feeBps != 0) {
+            try ICrestFeeSweeper(feeSweeper).DESTINATION() returns (address d) {
+                if (d == address(0)) revert CheckFailed("the sweeper names no destination");
+            } catch {
+                revert CheckFailed("the sweeper names no destination");
+            }
+        }
         (factory, module) = addresses(rules);
         vm.startBroadcast();
         if (
