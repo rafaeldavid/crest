@@ -14,13 +14,16 @@ import {IHoldbackModule} from "./IHoldbackModule.sol";
 /// @notice Pays a Holdback hold from a Crest vault. `IHoldbackModule` describes every function and error.
 contract HoldbackModule is IHoldbackModule, ICrestEscrowModule, ICrestBuyerModule {
     HoldbackRules public immutable RULES;
+    /// @inheritdoc IHoldbackModule
+    bool public immutable VAULT_IS_BUYER;
     AuthCaptureEscrow internal immutable ESCROW;
     address internal immutable COLLECTOR;
     address internal immutable TOKEN;
     uint64 internal immutable EXPIRY_MARGIN;
 
-    constructor(HoldbackRules rules) {
+    constructor(HoldbackRules rules, bool vaultIsBuyer) {
         RULES = rules;
+        VAULT_IS_BUYER = vaultIsBuyer;
         ESCROW = rules.ESCROW();
         COLLECTOR = rules.ERC3009_COLLECTOR();
         TOKEN = rules.TOKEN();
@@ -37,8 +40,11 @@ contract HoldbackModule is IHoldbackModule, ICrestEscrowModule, ICrestBuyerModul
     ) external returns (bytes32 id) {
         if (f.signature.length != 65) revert FundingSignatureNot65Bytes();
         bytes32 commitment = H.commitmentId(t);
+        address agent = t.buyer;
+        if (t.buyer == t.buyerPaymentAddress) agent = _agentOf(t, commitment, ag);
+        else if (VAULT_IS_BUYER) revert BuyerNotTheVault();
         ICrestVault(t.buyerPaymentAddress).charge(
-            t.buyer == t.buyerPaymentAddress ? _agentOf(t, commitment, ag) : t.buyer,
+            agent,
             t.price + t.fee,
             counterpartyOf(t.sellerPayoutAddress, t.adjudicator, t.fallbackAdjudicator, t.appealAdjudicator),
             commitment,
@@ -124,6 +130,7 @@ contract HoldbackModule is IHoldbackModule, ICrestEscrowModule, ICrestBuyerModul
         pure
         returns (BuyerMessage memory)
     {
+        if (t.seller == t.buyer) revert NotABuyerMessage();
         return BuyerMessage({
             digest: digest,
             commitment: id,
@@ -137,6 +144,7 @@ contract HoldbackModule is IHoldbackModule, ICrestEscrowModule, ICrestBuyerModul
 
     /// The key that signed the agreement inside a vault's buyer signature, whose grant the vault charges.
     function _agentOf(H.Terms calldata t, bytes32 id, H.Agree calldata ag) internal view returns (address key) {
+        if (ag.signature.length <= 65) revert BadBuyerSignature();
         (,, bytes memory ecdsa) = abi.decode(ag.signature, (address, bytes, bytes));
         if (ecdsa.length == 65) key = ECDSA.tryRecover(RULES.typedDataHash(H.agreeHash(id, t.buyer, ag)), ecdsa);
         if (key == address(0)) revert BadBuyerSignature();

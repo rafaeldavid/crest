@@ -179,7 +179,7 @@ contract HoldbackModuleTest is CrestBase {
     }
 
     function test_attack_moduleNotEnabled_refused() public {
-        HoldbackModule other = new HoldbackModule(rules);
+        HoldbackModule other = new HoldbackModule(rules, false);
         H.Terms memory t = _vterms(address(vault), buyer);
         bytes memory s = _sellerSig(t, SELLER_PK);
         H.Acceptance memory a = _acceptance(t, ADJ_PK);

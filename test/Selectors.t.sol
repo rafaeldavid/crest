@@ -7,7 +7,7 @@ import {CrestBase} from "./CrestBase.sol";
 /// any other selector reverts with any calldata from any caller.
 contract SelectorsTest is CrestBase {
     function test_theVaultsFunctions_areExactlyTheReviewedList() public view {
-        string[42] memory want = [
+        string[43] memory want = [
             "FEE_BPS()",
             "FEE_SWEEPER()",
             "ROOT()",
@@ -46,6 +46,7 @@ contract SelectorsTest is CrestBase {
             "setCaps(uint256,(uint128,uint128,uint128,uint32,uint32,uint40,bool,address),bytes)",
             "setModule(address,address,bytes)",
             "setPaused(uint256,bool,bytes)",
+            "signsAbove(address,uint256)",
             "signsFor(address,uint256)",
             "takeBackFromChild(address,uint256,bytes)",
             "token()",
@@ -78,8 +79,9 @@ contract SelectorsTest is CrestBase {
     function test_theModulesFunctions_areExactlyTheReviewedList() public view {
         string[] memory got =
             vm.parseJsonKeys(vm.readFile("out/HoldbackModule.sol/HoldbackModule.json"), ".methodIdentifiers");
-        string[11] memory start = [
+        string[12] memory start = [
             "RULES()",
+            "VAULT_IS_BUYER()",
             "agreeAndFund(",
             "agreeMessage(",
             "buyerMessage(bytes)",

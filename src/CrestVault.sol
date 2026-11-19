@@ -372,16 +372,22 @@ contract CrestVault is ICrestVault, EIP712 {
 
     /// @inheritdoc ICrestVault
     function signsFor(address who, uint256 id) public view returns (bool) {
+        return who != address(0) && ((_grants[id].controller == who && pathLive(id)) || signsAbove(who, id));
+    }
+
+    /// @inheritdoc ICrestVault
+    function signsAbove(address who, uint256 id) public view returns (bool) {
         if (who == address(0)) return false;
         if (_isTopPrincipal(who)) return true;
-        for (uint256 g = id; g != 0; g = _grants[g].parent) {
+        for (uint256 g = _grants[id].parent; g != 0; g = _grants[g].parent) {
             if (_grants[g].controller == who && pathLive(g)) return true;
         }
-        return parent != address(0) && ICrestVault(parent).signsFor(who, parentGrant);
+        return parent != address(0) && ICrestVault(parent).signsAbove(who, parentGrant);
     }
 
     /// @inheritdoc ICrestVault
     function pathLive(uint256 id) public view returns (bool) {
+        if (_grants[id].controller == address(0)) return false;
         for (uint256 g = id; g != 0; g = _grants[g].parent) {
             Grant storage x = _grants[g];
             uint40 end = x.caps.expiresAt;

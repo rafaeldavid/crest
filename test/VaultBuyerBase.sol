@@ -5,12 +5,36 @@ import {IHoldbackRules} from "holdback/IHoldbackRules.sol";
 import {HoldbackTypes as H} from "holdback/HoldbackTypes.sol";
 
 import {CrestVault} from "../src/CrestVault.sol";
+import {HoldbackModule} from "../src/modules/holdback/HoldbackModule.sol";
 import {RedTeamBase} from "./redteam/RedTeamBase.sol";
 
 /// The vault as the deal's buyer (design record, section 12): helpers that build the vault's buyer signature,
 /// `abi.encode(module, message, ecdsa)`, where `message` is the calldata of one of the Holdback module's message views
 /// and `ecdsa` is a key's 65-byte signature of the message's EIP-712 digest under Holdback's domain.
 abstract contract VaultBuyerBase is RedTeamBase {
+    /// The base's module, which also takes the agent's key as the buyer. Disabled here; `_useLegacyModule` enables it.
+    HoldbackModule internal legacy;
+
+    /// The principal enables only a module that takes the vault as the buyer (`VAULT_IS_BUYER`), as deployed.
+    function setUp() public virtual override {
+        super.setUp();
+        legacy = module;
+        module = new HoldbackModule(rules, true);
+        address payee = module.payee();
+        vm.startPrank(principal);
+        vault.setModule(address(legacy), address(0), "");
+        vault.setModule(address(module), payee, "");
+        vm.stopPrank();
+    }
+
+    /// For a comparison with today's deals: the module that also takes the agent's key as the buyer.
+    function _useLegacyModule() internal {
+        module = legacy;
+        address payee = module.payee();
+        vm.prank(principal);
+        vault.setModule(address(module), payee, "");
+    }
+
     /// A seller's delivery and the buyer's key envelope in it, for the early accepts below.
     struct Early {
         H.EarlyAccept m;

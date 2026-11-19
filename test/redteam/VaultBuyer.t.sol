@@ -7,6 +7,7 @@ import {HoldbackTypes as H} from "holdback/HoldbackTypes.sol";
 import {CrestVault} from "../../src/CrestVault.sol";
 import {ICrestVault} from "../../src/ICrestVault.sol";
 import {HoldbackModule} from "../../src/modules/holdback/HoldbackModule.sol";
+import {IHoldbackModule} from "../../src/modules/holdback/IHoldbackModule.sol";
 import {VaultBuyerBase} from "../VaultBuyerBase.sol";
 
 /// Red team: signing for the vault when it is the deal's buyer (design record, section 12's attack list, and the
@@ -146,23 +147,33 @@ contract RedTeamVaultBuyerTest is VaultBuyerBase {
         assertEq(vault.isValidSignature(digest, sig), NO_1271);
     }
 
+    /// From review test R2. Another vault's deal: that vault says yes; this one says no to the same blob, and no to a
+    /// message naming this vault whose digest does match, since this vault never paid the deal. The settlement digest
+    /// does not name the buyer, so the same digest is asked of both vaults.
     function test_attack_aDealAnotherVaultPays_refused() public {
         CrestVault other = CrestVault(factory.create(stranger, address(usdc), bytes32("other")));
         address payee = module.payee();
-        vm.prank(stranger);
+        vm.startPrank(stranger);
         other.setModule(address(module), payee, "");
-        vm.prank(stranger);
         other.grant(ROOT, buyer, _wide(), 0, "");
+        vm.stopPrank();
         usdc.mint(address(other), 10 * HOLD);
         H.Terms memory t = _bterms(other);
         bytes32 id = _fundAs(t, BUYER_PK);
-        Early memory e = _earlyAs(t, id, BUYER_PK);
-        bytes32 digest = _earlyDigest(t, id, e.m);
-        assertEq(other.isValidSignature(digest, e.m.signature), MAGIC_1271, "the paying vault says yes");
-        assertEq(vault.isValidSignature(digest, e.m.signature), NO_1271, "names another buyer");
-        bytes memory asThis =
-            _wrap(abi.encodeCall(module.earlyAcceptMessage, (id, address(vault), e.m)), digest, BUYER_PK);
+
+        H.Mutual memory m = _mutualAs(t, id, _fullRefund(t), BUYER_PK);
+        bytes32 digest = _mutualDigest(t, id, m);
+        assertEq(other.isValidSignature(digest, m.buyerSignature), MAGIC_1271, "the paying vault says yes");
+        assertEq(vault.isValidSignature(digest, m.buyerSignature), NO_1271, "the blob names another buyer");
+        bytes memory asThis = _wrap(abi.encodeCall(module.mutualMessage, (id, address(vault), m)), digest, BUYER_PK);
+        assertEq(module.mutualMessage(id, address(vault), m).digest, digest, "the same settlement digest");
         assertEq(vault.isValidSignature(digest, asThis), NO_1271, "this vault never paid that deal");
+
+        Early memory e = _earlyAs(t, id, BUYER_PK);
+        bytes32 forThis = rules.typedDataHash(hx.early(id, address(vault), e.m));
+        bytes memory early =
+            _wrap(abi.encodeCall(module.earlyAcceptMessage, (id, address(vault), e.m)), forThis, BUYER_PK);
+        assertEq(vault.isValidSignature(forThis, early), NO_1271, "never paid, with the digest matching");
     }
 
     // Attack 8: the token
@@ -282,7 +293,7 @@ contract RedTeamVaultBuyerTest is VaultBuyerBase {
         bytes32 digest = _earlyDigest(t, id, e.m);
         bytes memory message = abi.encodeCall(module.earlyAcceptMessage, (id, t.buyer, e.m));
 
-        HoldbackModule second = new HoldbackModule(rules);
+        HoldbackModule second = new HoldbackModule(rules, true);
         bytes memory viaSecond = abi.encode(address(second), message, _ecdsa(BUYER_PK, digest));
         assertEq(vault.isValidSignature(digest, viaSecond), NO_1271, "a module never enabled");
         address secondPayee = second.payee();
@@ -323,10 +334,108 @@ contract RedTeamVaultBuyerTest is VaultBuyerBase {
             abi.encodeCall(ICrestVault.isValidSignature, (digest, byTop.m.signature))
         );
         assertTrue(!ok || abi.decode(ret, (bytes4)) != MAGIC_1271, "a starved call is never a yes");
-        vm.expectRevert();
+        vm.expectRevert(IHoldbackRules.BadSignature.selector);
         rules.earlyAccept{gas: answer}(t, byTop.m, byTop.d, byTop.dsig, byTop.k);
         assertEq(uint8(_stage(id)), uint8(IHoldbackRules.Stage.Held), "nothing moved");
         _acceptEarly(t, byTop);
         assertEq(uint8(_stage(id)), uint8(IHoldbackRules.Stage.Released));
+    }
+
+    // Review findings
+
+    /// From review tests R1 and R1b. A stop on a child vault's root silences the child's principal (the agent), whose
+    /// grant in the parent the child's root extends: it signs neither through the child nor through the parent. The top
+    /// principal signs instead.
+    function test_attack_aPauseOnAChildVaultsRoot_silencesItsPrincipal() public {
+        _childRootStopped(false);
+    }
+
+    function test_attack_aCloseOfAChildVaultsRoot_silencesItsPrincipal() public {
+        _childRootStopped(true);
+    }
+
+    function _childRootStopped(bool close) internal {
+        (CrestVault child,) = _agentChild(2 * HOLD);
+        H.Terms memory t = _bterms(child);
+        bytes32 id = _fundAs(t, SUB_PK);
+        vm.prank(principal);
+        if (close) child.close(ROOT, "close the child vault");
+        else child.setPaused(ROOT, true, "stop the child vault");
+
+        assertFalse(child.signsFor(buyer, child.getOpen(id).grant), "the stopped root's controller");
+        _expectEarlyRefused(t, _earlyAs(t, id, BUYER_PK));
+        _expectEarlyRefused(t, _earlyAs(t, id, SUB_PK));
+        _acceptEarly(t, _earlyAs(t, id, PRINCIPAL_PK));
+        assertEq(uint8(_stage(id)), uint8(IHoldbackRules.Stage.Released));
+    }
+
+    /// From review test R4. The terms digest is also the one Holdback asks its seller to sign, so a deal naming the vault
+    /// as buyer and seller would let one agent key both offer and agree. The module refuses terms that name one party as
+    /// both, so the vault cannot be its own seller.
+    function test_attack_aDealNamingTheVaultAsBuyerAndSeller_refused() public {
+        H.Terms memory t = _bterms(vault);
+        t.seller = address(vault);
+        bytes memory asSeller = _termsSig(t, BUYER_PK);
+        bytes32 digest = rules.typedDataHash(hx.id(t));
+        vm.expectRevert(IHoldbackModule.NotABuyerMessage.selector);
+        vault.isValidSignature(digest, asSeller);
+        H.Acceptance memory acc = _acceptance(t, ADJ_PK);
+        H.Agree memory a = _agreeAs(t, BUYER_PK);
+        vm.expectRevert(IHoldbackRules.BadSignature.selector);
+        module.agreeAndFund(t, asSeller, acc, a, H.Funding({signature: new bytes(65)}));
+        assertEq(_grantOf(vault, agentGrant).spent, 0, "nothing counted");
+    }
+
+    /// From review test R5. A plain 65-byte agreement for a vault buyer is refused by name.
+    function test_attack_aRawAgreementForAVaultBuyer_refusedByName() public {
+        H.Terms memory t = _bterms(vault);
+        _expectFundRefused(t, _agree(t, BUYER_PK), abi.encodeWithSelector(IHoldbackModule.BadBuyerSignature.selector));
+    }
+
+    /// From review test R6. A grant that does not exist has no live path.
+    function test_attack_aGrantThatDoesNotExist_hasNoLivePath() public view {
+        assertEq(vault.getGrant(123_456_789).controller, address(0));
+        assertFalse(vault.pathLive(123_456_789));
+        assertFalse(vault.pathLive(0));
+        assertFalse(vault.signsFor(stranger, 123_456_789));
+    }
+
+    /// From review test R10. A message shorter than a selector is refused by name.
+    function test_attack_aMessageShorterThanASelector_isNotABuyerMessage() public {
+        vm.expectRevert(IHoldbackModule.NotABuyerMessage.selector);
+        module.buyerMessage(hex"aabbcc");
+        vm.expectRevert(IHoldbackModule.NotABuyerMessage.selector);
+        module.buyerMessage("");
+    }
+
+    /// From review test R9. A high-`s` twin of a valid signature is also a yes. Neither Holdback nor the vault uses a
+    /// signature's bytes as an identity, so the twin gives nothing the original does not.
+    function test_observe_aHighSTwinOfAValidSignature_isAlsoAYes() public {
+        H.Terms memory t = _bterms(vault);
+        bytes32 id = _fundAs(t, BUYER_PK);
+        Early memory e = _earlyAs(t, id, BUYER_PK);
+        bytes32 digest = _earlyDigest(t, id, e.m);
+        (uint8 v, bytes32 r, bytes32 sLow) = vm.sign(BUYER_PK, digest);
+        uint256 n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
+        bytes memory high = abi.encodePacked(r, bytes32(n - uint256(sLow)), v == 27 ? uint8(28) : uint8(27));
+        bytes memory blob =
+            abi.encode(address(module), abi.encodeCall(module.earlyAcceptMessage, (id, t.buyer, e.m)), high);
+        assertEq(vault.isValidSignature(digest, blob), MAGIC_1271);
+    }
+
+    /// From review test R12. After the escrow's expiry anyone may end the commitment through the module, and the vault
+    /// then signs for no one on that deal. The hold comes back by the escrow's payer-only `reclaim` (the vault's own) or
+    /// Holdback's timeouts; after the escrow's expiry a settlement cannot pay the seller anyway.
+    function test_observe_afterTheCommitmentEndsAtExpiry_theVaultSignsForNoOne() public {
+        H.Terms memory t = _bterms(vault);
+        bytes32 id = _fundAs(t, BUYER_PK);
+        vm.warp(uint256(t.timing.fallbackBy) + t.timing.appealDecideSec + rules.EXPIRY_MARGIN());
+        module.close(t);
+        assertEq(uint8(_stage(id)), uint8(IHoldbackRules.Stage.Held), "the rules contract still holds it");
+        H.Mutual memory m = _mutualAs(t, id, _fullRefund(t), PRINCIPAL_PK);
+        assertEq(vault.isValidSignature(_mutualDigest(t, id, m), m.buyerSignature), NO_1271);
+        uint256 before = usdc.balanceOf(address(vault));
+        vault.reclaim(address(module), _pi(t));
+        assertEq(usdc.balanceOf(address(vault)) - before, HOLD, "the hold came back to the vault");
     }
 }

@@ -136,7 +136,7 @@ contract RedTeamApprovalTest is RedTeamBase {
     /// The principal enables a second module on the same rules contract (a redeploy left both enabled). It cannot open the
     /// same deal a second time, nor release the first module's commitment.
     function test_attack_aSecondModuleOnTheSameRulesOpensOrReleasesTheSameDeal_refused() public {
-        HoldbackModule second = new HoldbackModule(rules);
+        HoldbackModule second = new HoldbackModule(rules, false);
         address payee = second.payee();
         vm.prank(principal);
         vault.setModule(address(second), payee, "");

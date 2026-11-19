@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {IHoldbackRules} from "holdback/IHoldbackRules.sol";
 import {HoldbackTypes as H} from "holdback/HoldbackTypes.sol";
 
+import {CrestFactory} from "../src/CrestFactory.sol";
 import {CrestVault} from "../src/CrestVault.sol";
 import {ICrestVault} from "../src/ICrestVault.sol";
 import {IHoldbackModule} from "../src/modules/holdback/IHoldbackModule.sol";
@@ -40,6 +41,17 @@ contract VaultBuyerTest is VaultBuyerBase {
         _settle(t, _mutualAs(t, id, _fullRefund(t), BUYER_PK));
         assertEq(uint8(_stage(id)), uint8(IHoldbackRules.Stage.Settled));
         assertEq(usdc.balanceOf(address(vault)), before, "the whole hold came back");
+    }
+
+    /// The red team's Medium (I1): with a module that also took the agent's key as the buyer, the agent chose its own
+    /// key and kept its early accept after every stop. The module the principal enables here takes only the vault as
+    /// the buyer, so the agent cannot choose.
+    function test_attack_theAgentNamesItsOwnKeyAsTheBuyer_refusedByAVaultBuyerModule() public {
+        assertTrue(module.VAULT_IS_BUYER());
+        _expectRefused(
+            _vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(IHoldbackModule.BuyerNotTheVault.selector)
+        );
+        assertEq(_grantOf(vault, agentGrant).spent, 0, "nothing counted");
     }
 
     // The principal steps in after a stop
@@ -265,6 +277,7 @@ contract VaultBuyerTest is VaultBuyerBase {
     // test_gas_ -vv`, so each call is its own transaction and starts cold.
 
     function test_gas_aFundingWithTheAgentsKeyAsTheBuyer() public {
+        _useLegacyModule();
         H.Terms memory t = _vterms(address(vault), buyer);
         _measureFunding("the agent's key as the buyer", _fundCall(t, BUYER_PK));
     }
@@ -305,6 +318,7 @@ contract VaultBuyerTest is VaultBuyerBase {
     }
 
     function test_gas_anEarlyAcceptWithTheAgentsKeyAsTheBuyer() public {
+        _useLegacyModule();
         H.Terms memory t = _vterms(address(vault), buyer);
         bytes32 id = _fundVia(t, BUYER_PK);
         _earlyAcceptAsAgent(t, id);
@@ -324,5 +338,55 @@ contract VaultBuyerTest is VaultBuyerBase {
         for (uint256 i; i < data.length; i++) {
             gas += data[i] == 0 ? 4 : 16;
         }
+    }
+
+    // Review findings
+
+    /// From review test R3. The dry run before funding counts Crest's fee as `charge` does: one unit short of the hold
+    /// plus its fee is a no, exactly that is a yes, and the funding then charges exactly that.
+    function test_beforeFunding_theDryRunCountsCrestsFee() public {
+        CrestFactory ff = new CrestFactory(100, makeAddr("sweeper"));
+        CrestVault fv = CrestVault(ff.create(principal, address(usdc), bytes32("fee")));
+        uint256 exact = HOLD + HOLD * 100 / 10_000;
+        address payee = module.payee();
+        vm.startPrank(principal);
+        fv.setModule(address(module), payee, "");
+        uint256 g =
+            fv.grant(ROOT, buyer, _caps(exact - 1, type(uint128).max, type(uint128).max, 10, false, true), 0, "");
+        vm.stopPrank();
+        usdc.mint(address(fv), 10 * HOLD);
+        H.Terms memory t = _bterms(fv);
+        bytes32 termsDigest = rules.typedDataHash(hx.id(t));
+        assertEq(fv.isValidSignature(termsDigest, _termsSig(t, BUYER_PK)), NO_1271, "one unit short with the fee");
+        _expectFundRefused(t, _agreeAs(t, BUYER_PK), abi.encodeWithSelector(ICrestVault.OverPerSpend.selector, g));
+        vm.prank(principal);
+        fv.setCaps(g, _caps(exact, type(uint128).max, type(uint128).max, 10, false, true), "");
+        assertEq(fv.isValidSignature(termsDigest, _termsSig(t, BUYER_PK)), MAGIC_1271, "exactly the hold and its fee");
+        _fundAs(t, BUYER_PK);
+        assertEq(fv.getGrant(g).spent, exact);
+    }
+
+    /// From review test R8. After the principal disables the module, it enables it again and signs.
+    function test_afterTheModuleIsEnabledAgain_thePrincipalSigns() public {
+        H.Terms memory t = _bterms(vault);
+        bytes32 id = _fundAs(t, BUYER_PK);
+        address payee = module.payee();
+        vm.prank(principal);
+        vault.setModule(address(module), address(0), "off");
+        _expectEarlyRefused(t, _earlyAs(t, id, PRINCIPAL_PK));
+        vm.prank(principal);
+        vault.setModule(address(module), payee, "on again");
+        _acceptEarly(t, _earlyAs(t, id, PRINCIPAL_PK));
+        assertEq(uint8(_stage(id)), uint8(IHoldbackRules.Stage.Released));
+    }
+
+    /// From review test R11. Today's deal, with the agent's key as the buyer and the vault as the payer, charges the
+    /// agent's grant as before.
+    function test_todaysDealWithTheAgentsKeyAsTheBuyer_chargesTheAgentsGrantAsBefore() public {
+        _useLegacyModule();
+        H.Terms memory t = _vterms(address(vault), buyer);
+        bytes32 id = _fundVia(t, BUYER_PK);
+        assertEq(vault.getOpen(id).grant, agentGrant);
+        assertEq(_grantOf(vault, agentGrant).spent, HOLD);
     }
 }

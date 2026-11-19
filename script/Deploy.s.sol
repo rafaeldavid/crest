@@ -21,7 +21,11 @@ import {HoldbackModule} from "../src/modules/holdback/HoldbackModule.sol";
 ///      [measured, 2026-11-19, forge 1.0.0]. On Sepolia the rules contract is the one in Holdback's own record at the
 ///      commit the submodule pins; on a local chain it is `HOLDBACK_RULES`. `CREST_RECORD`, optional, moves the
 ///      record, so a rehearsal never writes `deployments/11155111.json`. The factory's fee comes from
-///      `CREST_FEE_BPS` and `CREST_FEE_SWEEPER`, both 0 when unset; a rate above 0 needs a sweeper contract.
+///      `CREST_FEE_BPS` and `CREST_FEE_SWEEPER`, both 0 when unset; a rate above 0 needs a sweeper contract. The module
+///      takes only the vault as the buyer (`VAULT_IS_BUYER`), and `check` refuses one that does not.
+///      Gas: on Sepolia, contract creation costs about 7 times a local or anvil-fork estimate [measured, 2026-11-19: the
+///      factory took 28.3 million gas against 4.1 million estimated]. Estimate each creation with `cast estimate`
+///      against the live RPC, which sends nothing, and pass forge a `--gas-estimate-multiplier` that covers it.
 contract Deploy is Script {
     uint256 internal constant SEPOLIA = 11_155_111;
     uint256 internal constant LOCAL = 31_337;
@@ -67,7 +71,8 @@ contract Deploy is Script {
         ) {
             revert CheckFailed("the factory is not at its CREATE2 address");
         }
-        if (address(module).code.length == 0 && address(new HoldbackModule{salt: SALT}(rules)) != address(module)) {
+        if (address(module).code.length == 0 && address(new HoldbackModule{salt: SALT}(rules, true)) != address(module))
+        {
             revert CheckFailed("the module is not at its CREATE2 address");
         }
         CrestAllowList list = allowListAddress();
@@ -108,7 +113,7 @@ contract Deploy is Script {
     function addresses(HoldbackRules rules) public view returns (CrestFactory factory, HoldbackModule module) {
         (uint256 feeBps, address feeSweeper) = feeOf();
         bytes memory factoryInit = abi.encodePacked(type(CrestFactory).creationCode, abi.encode(feeBps, feeSweeper));
-        bytes memory moduleCode = abi.encodePacked(type(HoldbackModule).creationCode, abi.encode(rules));
+        bytes memory moduleCode = abi.encodePacked(type(HoldbackModule).creationCode, abi.encode(rules, true));
         factory = CrestFactory(vm.computeCreate2Address(SALT, keccak256(factoryInit)));
         module = HoldbackModule(vm.computeCreate2Address(SALT, keccak256(moduleCode)));
     }
@@ -129,6 +134,7 @@ contract Deploy is Script {
         if (address(module.RULES()) != address(rules)) revert CheckFailed("the module names another rules contract");
         if (module.payee() != rules.ERC3009_COLLECTOR()) revert CheckFailed("the module pays another collector");
         if (module.escrow() != address(rules.ESCROW())) revert CheckFailed("the module names another escrow");
+        if (!module.VAULT_IS_BUYER()) revert CheckFailed("the module lets an agent's key be the buyer");
     }
 
     function recordPath(uint256 chainId) public view virtual returns (string memory) {

@@ -32,8 +32,9 @@ import {AuthCaptureEscrow} from "commerce-payments/AuthCaptureEscrow.sol";
 ///
 ///         Payments. An enabled module asks the vault to `charge` a key's grant. After the charge the vault approves
 ///         exactly one ERC-3009 `ReceiveWithAuthorization`: from the vault, to the module's pinned payee, for exactly
-///         the charged amount, with the module's deadline and nonce, for the rest of the transaction. It answers
-///         ERC-1271 to the token only, and only for that digest, so no key's own signature ever moves the vault's money.
+///         the charged amount, with the module's deadline and nonce, for the rest of the transaction. It answers the
+///         token through ERC-1271 for that digest only, so no key's own signature ever moves the vault's money. To
+///         anyone else it answers only for a buyer message, below, and that moves nothing by itself.
 ///
 ///         The vault as the buyer. A deal may name the vault itself as its buyer as well as its payer, so that a
 ///         stop reaches the agent's signature on funded deals. The vault then answers ERC-1271 for the venue's buyer
@@ -200,7 +201,9 @@ interface ICrestVault {
     function acceptPrincipal(bytes calldata note) external;
 
     /// @notice A top vault's principal enables `module` to have this vault pay `payee`, or disables it with payee 0.
-    ///         Child vaults inherit the top vault's modules and cannot set their own.
+    ///         Child vaults inherit the top vault's modules and cannot set their own. A module that is also an
+    ///         `ICrestBuyerModule` decides, while enabled, which buyer messages the vault signs for deals it names the
+    ///         vault the buyer of: enable only a module whose message views are reviewed.
     function setModule(address module, address payee, bytes calldata note) external;
 
     /// @notice A top vault's principal sends `amount` of the vault's balance to `to`. Money a venue holds is not the
@@ -316,13 +319,20 @@ interface ICrestVault {
     ///         not delegate.
     function checkDelegable(uint256 id) external view;
 
-    /// @notice Whether `who` signs for the deals of grant `id` when the vault is the buyer: it is this top vault's
-    ///         principal, or it controls a grant on `id`'s path, here or in an ancestor vault, whose own path is live
-    ///         (`pathLive`). So a stop on a grant, or anywhere above it, silences that grant's controller and everyone
-    ///         below it, and authority above the stop signs instead.
+    /// @notice Whether `who` signs for the deals of grant `id` when the vault is the buyer: it controls `id` while
+    ///         `id`'s path is live (`pathLive`), or it signs above `id` (`signsAbove`). So a stop on a grant, or anywhere
+    ///         above it, silences that grant's controller and everyone below it, and authority above the stop signs
+    ///         instead.
     function signsFor(address who, uint256 id) external view returns (bool);
 
-    /// @notice Whether every grant on `id`'s path, here and in every ancestor vault, is open, unpaused and unexpired.
+    /// @notice Whether `who` signs strictly above grant `id`: it is this top vault's principal, or it controls a grant
+    ///         strictly above `id` whose own path is live, here or, strictly above this vault's parent grant, in an
+    ///         ancestor vault. A child vault's root extends its parent grant, so a stop on that root silences the
+    ///         parent grant's controller too.
+    function signsAbove(address who, uint256 id) external view returns (bool);
+
+    /// @notice Whether grant `id` exists and every grant on its path, here and in every ancestor vault, is open,
+    ///         unpaused and unexpired.
     function pathLive(uint256 id) external view returns (bool);
 
     /// @notice The payee pinned for `module` at the top vault; 0 when it is not enabled.

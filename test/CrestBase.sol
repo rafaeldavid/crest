@@ -42,7 +42,7 @@ abstract contract CrestBase is Base {
         stranger = makeAddr("stranger");
         allowList = new CrestAllowList();
         factory = new CrestFactory(0, address(0));
-        module = new HoldbackModule(rules);
+        module = new HoldbackModule(rules, false); // the agent's key as the buyer, as these suites test
         vault = CrestVault(factory.create(principal, address(usdc), bytes32(0)));
         vm.startPrank(principal);
         vault.setModule(address(module), module.payee(), "");
