@@ -10,6 +10,8 @@ It borrows Holdback's own buyer tools from a Holdback checkout (`HOLDBACK_ROOT`)
 
 The agent's page is `docs/pay-through-a-vault.txt`, a draft served to the agents by the test's local web only.
 
+With `CREST_BUYER=vault` the vault itself is the deal's buyer (`docs/design.md`, section 19). The command then takes the deal's decryption key from `CREST_DEAL_KEY_FILE`, a key the principal also holds, so the principal can read the delivered work when it steps in on a deal. It stops before signing until Holdback's operators read a contract buyer's signature (schema v0.12, T-549).
+
 One finding shaped it: Holdback's `buy-with-signer` makes a fresh signing key for every deal, and a grant names one key in advance. So `vault-buy` keeps one long-lived key per agent and copies it into each purchase's key store (`docs/design.md`, open point 11).
 
 ## The two-model test

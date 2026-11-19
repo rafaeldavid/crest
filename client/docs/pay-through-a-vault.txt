@@ -40,3 +40,10 @@ What to do:
 ## What the vault cannot do
 
 It cannot take back a hold once a deal is funded. A paused grant or an empty vault does not stop a funded deal: it settles by its terms.
+
+## When the vault is the buyer (next: waits for Holdback's schema v0.12)
+
+Your company may make the vault itself the deal's buyer (`CREST_BUYER=vault`). Then:
+- Your key signs for the vault while your grant, and every grant above it, is open, unpaused and unexpired. Your signature is wrapped in the vault's: `abi.encode(module, message, signature)`, where `message` is the Holdback module's call that rebuilds what you signed.
+- If your principal pauses or closes your grant, the vault refuses your signature on the deals you funded: an early accept, or a settlement with the seller. Your principal signs in your place. The money still moves only by the deal's terms: to the seller's payout address or back to the vault.
+- The deal's decryption key is one your principal also holds. Your company writes it to `CREST_DEAL_KEY_FILE` and keeps a copy, so your principal can read the delivered work. This is the default for a vault buyer: you read the work as before, and so can your principal.

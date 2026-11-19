@@ -7,7 +7,7 @@ import {CrestBase} from "./CrestBase.sol";
 /// any other selector reverts with any calldata from any caller.
 contract SelectorsTest is CrestBase {
     function test_theVaultsFunctions_areExactlyTheReviewedList() public view {
-        string[40] memory want = [
+        string[42] memory want = [
             "FEE_BPS()",
             "FEE_SWEEPER()",
             "ROOT()",
@@ -36,6 +36,7 @@ contract SelectorsTest is CrestBase {
             "isValidSignature(bytes32,bytes)",
             "parent()",
             "parentGrant()",
+            "pathLive(uint256)",
             "payeeOf(address)",
             "pendingPrincipal()",
             "principal()",
@@ -45,6 +46,7 @@ contract SelectorsTest is CrestBase {
             "setCaps(uint256,(uint128,uint128,uint128,uint32,uint32,uint40,bool,address),bytes)",
             "setModule(address,address,bytes)",
             "setPaused(uint256,bool,bytes)",
+            "signsFor(address,uint256)",
             "takeBackFromChild(address,uint256,bytes)",
             "token()",
             "withdraw(address,uint256,bytes)"
@@ -76,13 +78,18 @@ contract SelectorsTest is CrestBase {
     function test_theModulesFunctions_areExactlyTheReviewedList() public view {
         string[] memory got =
             vm.parseJsonKeys(vm.readFile("out/HoldbackModule.sol/HoldbackModule.json"), ".methodIdentifiers");
-        string[6] memory start = [
+        string[11] memory start = [
             "RULES()",
             "agreeAndFund(",
+            "agreeMessage(",
+            "buyerMessage(bytes)",
             "close(",
             "counterpartyOf(address,address,address,address)",
+            "earlyAcceptMessage(bytes32,address,(uint8,bytes32,bytes32,uint64,bytes))",
             "escrow()",
-            "payee()"
+            "mutualMessage(",
+            "payee()",
+            "termsMessage("
         ];
         assertEq(got.length, start.length, "the module's function count changed");
         for (uint256 i; i < start.length; i++) {

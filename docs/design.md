@@ -148,9 +148,9 @@ The maintainer: "if an agent uses a vault, the vault admin owner should be the b
   - The principal's key never has to sign a deal, so buying stays autonomous.
 - **Without a vault, the agent's key is the buyer,** as today.
 
-### 12. Build plan: the vault as the buyer (not built)
+### 12. Build plan: the vault as the buyer (built 2026-11-19; section 19)
 
-The build waits for the first stage of the two-model test (T-560), which runs with the agent's key as the buyer. The same scenarios then rerun with the vault as the buyer, plus new ones where the principal steps in on a funded deal.
+The build waited for the first stage of the two-model test (T-560), which ran with the agent's key as the buyer and is done. The same scenarios rerun with the vault as the buyer once the maintainer says go, plus new ones where the principal steps in on a funded deal. Section 19 records what was built and measured.
 
 **What the vault answers, and to whom.** Holdback's rules contract checks `buyer` through Solady's `SignatureCheckerLib`: ECDSA for an address without code, ERC-1271 for one with code (`HoldbackRules.sol:581-587`). It asks for three things:
 - the agreement (`:192`);
@@ -506,7 +506,7 @@ The maintainer asked: "For Crest and spend controls, we may need to add a small 
   - **An undelivered hold can come back.** The merchant lets the deal lapse, and anyone returns the hold to the vault at its delivery deadline [measured, section 4; `HoldbackRules.sol:440-447`].
   - **A cancel before that needs the agent's key.** It is a settlement both sides sign, and Holdback asks for the buyer's signature (`HoldbackRules.sol:393-394`). Holdback never calls the escrow's refund, so a merchant has no refund it can send alone [measured, by reading the rules contract at `978aa38d`].
   - **A delivered hold is the agent's to release.** After every stop, the agent's key can still accept early any hold whose merchant has signed a delivery. The price then goes to the listed merchant with no judgment, and the deal can no longer lapse or be cancelled [measured, `test_observe_afterEveryStop_theAgentsKeyStillAcceptsADeliveredHoldEarly`; ADR-0041 section 4; `test/redteam/Neutrality.t.sol`]. Speaking with the vendor does not reach that money.
-- **With the vault as the buyer** (section 12) [planned, not built]: the vault refuses a stopped agent's early accept and settlement signature, and the principal signs in its place. So the principal and the merchant can cancel a funded deal without the agent, and a stopped agent cannot release a delivered hold.
+- **With the vault as the buyer** (sections 12 and 19): the vault refuses a stopped agent's early accept and settlement signature, and the principal signs in its place. So the principal and the merchant can cancel a funded deal without the agent, and a stopped agent cannot release a delivered hold [measured, `test_attack_afterEveryStop_theStoppedAgentCannotRelease_andThePrincipalCancelsWithTheMerchant`].
 - **Work that passes the deal's terms is paid** by the adjudicator's decision. That is a purchase the agent was allowed to make [documented, Holdback's terms].
 
 **Why a delay does not help** [inferred]:
@@ -515,11 +515,103 @@ The maintainer asked: "For Crest and spend controls, we may need to add a small 
 
 **What a principal should do, in order:**
 1. Set the period and lifetime limits to what it accepts losing to a front-run. They are the bound, through child vaults and early accepts included [measured, sections 3 and 4]. The open limit is not. A front-run that lands across a period boundary gets the rest of one period and the next period's limit [inferred].
-2. Stop with a pause first, of the agent's grant or of the root. From the block it lands nothing more leaves the vault, so a withdrawal sent after it holds [measured, section 6]. Until the vault is the buyer, a delivered hold stays the agent's to accept.
-3. Use the vault as the buyer once it is built (section 12).
+2. Stop with a pause first, of the agent's grant or of the root. From the block it lands nothing more leaves the vault, so a withdrawal sent after it holds [measured, section 6]. While the agent's key is the buyer, a delivered hold stays the agent's to accept.
+3. Make the vault the buyer (section 19).
 4. Send stops through a private transaction relay where the chain has one, so the agent sees a stop only once it lands [inferred; not tested].
 
 **A second review from another model family** is recommended for this section by the first review, since it records a security decision. It has not run.
+
+### 19. The vault as the buyer (built 2026-11-19)
+
+The coordinator relayed the go-ahead on the maintainer's recorded words: the vault is the buyer when a vault is used, built after the first stage of the two-model test, which is done; and "1. A vault owner on a funded deal: Yes, the owner may". Holdback's line narrowing ADR-0038 point 4 for a contract buyer is on Holdback's `main` (pull request 704). Holdback's contracts are unchanged: its rules contract asks a buyer with code through ERC-1271.
+
+**What changed.**
+- **The vault.**
+  - `isValidSignature` answers the token exactly as before, and only through the one digest `charge` approved.
+  - It answers anyone else for a buyer message.
+  - Two views are new: `signsFor(who, id)` and `pathLive(id)`.
+- **The module.**
+  - When the terms name the payment address as the buyer too, `agreeAndFund` charges the key that signed the agreement inside the vault's signature.
+  - Four views rebuild the digests of the buyer's messages: the terms, the agreement, an early accept and the buyer's half of a settlement. `buyerMessage` dispatches to them and refuses any other call.
+- **The vault's signature** is `abi.encode(module, message, ecdsa)`. `message` is the calldata of one of those views, and `ecdsa` is a key's 65-byte signature of the digest under Holdback's EIP-712 domain. Holdback's operators pass it to `isValidSignature` unread.
+
+**The rule.** The vault says yes when all of these hold:
+1. The module is enabled at the top vault.
+2. It rebuilds exactly the digest asked about, naming this vault as the buyer.
+3. The signer qualifies:
+   - **For a deal this vault paid through that module:** the signer signs for the grant that paid it. That is the top principal, or the controller of a grant on that grant's path, here or in an ancestor vault, whose own path is open, unpaused and unexpired. So a stop on a grant, or anywhere above it, silences everyone at and below the stop, and authority above the stop signs instead.
+   - **For a deal not yet paid** (the terms and the agreement only): the deal names this vault as its payer, and the signer's own grant passes `checkPath` for the deal's amount, fee included, and its counterparty.
+
+**The coordinator's seven points:**
+1. **Funding time.**
+   - **Before the deal is paid,** the vault's answer for the terms and the agreement is a dry run of the payment. A yes moves nothing: the vault's money moves only through `charge`'s one-transaction approval. A funding sent straight to the rules contract, without the module, gets the agreement through and is refused at the token [measured, `test_attack_aFundingWithoutTheModule_movesNothing`].
+   - **Inside the funding transaction,** the module's `charge` records the deal first. The rules contract's check of the agreement then finds a paid deal and asks that the signer signs for the grant that paid. A deal that never funds leaves no record, since its whole transaction reverts.
+   - **One agreement opens one deal.** Its digest names the deal's ID. A second funding of the same deal is refused with `CommitmentOpen`. On other terms the agreement recovers a key with no grant (`NoGrant`). A message that names one deal with a signature over another is refused with `BadSignature` [measured, `test_attack_anAgreementOpensOneDealOnly`].
+2. **A stop between an operator's check and the chain.** A signature that passes an `eth_call` before a pause is refused on chain after it (`BadSignature`). Nothing moves, and the principal's signature then lands [measured, `test_attack_aSignatureAnOperatorChecked_isRefusedOnChainAfterAStop_andNothingMoves`].
+3. **Gas and depth.**
+   - **No depth limit.** Child vaults have none, as before (parametrize, don't restrict). The vault's answer walks the deal's path through every ancestor vault, so its gas grows with depth.
+   - **The cost per level.** Measured cold with `forge test --isolate` for the top principal, the longest walk [measured]:
+
+     | Early accept | Execution gas |
+     | --- | --- |
+     | The agent's key as the buyer | 204,236 |
+     | The vault as the buyer, depth 0 | 234,713 |
+     | Depth 1 | 211,370 |
+     | Depth 2 | 230,723 |
+     | Depth 3 | 250,076 |
+     | Depth 4 | 269,441 |
+
+     The vault's answer adds about 30,500 gas at depth 0, and each level adds about 19,400. Depth 0 and the agent's-key row each include the seller's first payment in its test, which writes a new balance; the deeper rows do not [inferred].
+   - **The call alone.** `isValidSignature` used 12,654 gas for the top principal at depth 0 and 32,114 at depth 4, with warm storage [measured].
+   - **A starved call.** Holdback's rules contract reads a failed or starved `isValidSignature` as a no. A call given half the gas it needs is not a yes. An early accept sent with only the answer's gas reverts and moves nothing, and the same signature lands with enough gas [measured, `test_attack_aStarvedBuyerAnswer_isANo_andHoldbackRefuses`, at depth 4]. Starving a call only fails the sender's own transaction.
+4. **Malformed signatures** [measured, `test/redteam/VaultBuyer.t.sol`]:
+   - 65 bytes or fewer, the agent's raw signature included, is a no.
+   - A blob that does not decode, 20,000 bytes of `0xff` or bad offsets, makes the call revert, which Holdback reads as a no.
+   - A blob naming a module the principal never enabled is a no. So is one naming an enabled module that did not open the deal.
+   - A blob naming a module call that is not a message view reverts.
+   - Bytes after a valid blob are ignored, since the digest and the signer decide [observed].
+5. **The module disabled after funding.** Neither the agent nor the principal can sign for the buyer, since the vault answers only through an enabled module. The deal then ends by its terms: the adjudicator's decision, or Holdback's refund at the delivery deadline and its default. The principal can enable the module again to sign [measured, `test_attack_afterTheModuleIsDisabled_noOneSignsForTheBuyer_andTheTermsStillEndTheDeals`].
+6. **The principal's signature after a stop.**
+   - It pays only the deal's two fixed addresses, the seller's payout address and the vault. A settlement naming the principal is refused by Holdback (`InvalidMessage`).
+   - It opens no deal. Presented as an agreement it recovers a key with no grant, and the principal's own agreement is refused while the root is paused. With the root open, the principal can open a new deal from the root on purpose, as it always could.
+   - Neither the principal's key nor the agent's receives anything [measured, `test_thePrincipalsSignatureAfterAStop_paysOnlyTheDealsTwoAddresses_andOpensNoDeal`].
+7. **The buyer's decryption key: a choice for the maintainer.**
+   - Holdback binds a delivery's key envelope to the buyer's address and leaves the decryption key to the parties [measured, `HoldbackRules.sol:554-559`].
+   - With the vault as the buyer, the client's default is a deal key the principal also holds (`CREST_DEAL_KEY_FILE`), so the principal can read the delivered work. The agent page says so.
+   - The other choice is the agent's own key, as today. The principal then sees the work only if the agent shares it, which is the gap the two-model test found.
+   - The default is recommended, since a principal who steps in on a deal must see what it is accepting [inferred].
+
+**The tests** [measured, 2026-11-19]:
+- `test/VaultBuyer.t.sol`: 18 tests. They cover the deal's life with the agent signing, the principal stepping in after each stop, a live agent signing for its paused sub-agent, a child vault buying its own deals, points 1 and 6, and gas.
+- `test/redteam/VaultBuyer.t.sol`: 19 attack tests, each refused. They cover section 12's nine attacks; an expired grant; a paused controller above signing for a deal below; the previous principal after a handover; and points 2 to 5.
+- The full suite: 449 passed, 0 failed, 4 skipped.
+
+**Gas of a funding** [measured cold, `forge test --isolate`]:
+
+| | Execution gas | Calldata gas (bytes) |
+| --- | --- | --- |
+| The agent's key as the buyer | 452,026 | 18,808 (2,020) |
+| The vault as the buyer | 495,497 | 32,308 (3,460) |
+
+The vault as the buyer adds 43,471 execution gas and 13,500 calldata gas: 56,971, about 12%. Most of the calldata is the terms, which the agreement's message carries a second time so the vault can check the payer before funding.
+
+**Lines** [measured, `wc -l`]:
+
+| File | Before | After | Added |
+| --- | --- | --- | --- |
+| `CrestVault.sol` | 553 | 596 | 43 |
+| `ICrestVault.sol` | 332 | 385 | 53 |
+| `HoldbackModule.sol` | 102 | 168 | 66 |
+| `IHoldbackModule.sol` | 56 | 92 | 36 |
+| `CrestFactory.sol`, `ICrestFactory.sol` | 102 | 102 | 0 |
+| The six reviewed files | 1,145 | 1,343 | 198 |
+| All ten contract files | 1,241 | 1,439 | 198 |
+
+**What waits.**
+- **Live deals** wait for Holdback's T-549: schema v0.12's `PartySignature` for buyer signatures, and its operators' ERC-1271 reads. Nothing here pins T-549.
+- **The client** keeps stopping before it signs as the vault until then.
+- **The rerun** of the two-model test with the vault as the buyer spends model credit, so it waits for the maintainer's go.
+- **The Sepolia deploy of this build** is a new factory and module at new addresses. Vaults from an earlier factory keep the agent's key as the buyer.
 
 ## Open, for the maintainer
 
@@ -531,7 +623,7 @@ The maintainer asked: "For Crest and spend controls, we may need to add a small 
     **To raise before any factory with a non-zero rate:** the first is the one real product choice once a rate is above 0, because a buyer whose hold is refunded still pays the fee. A new factory is the moment to revisit it.
 2. **The external merchant list** (section 15): decided and built.
 3. **Grants by signature** (section 17): decided and built, shape (a).
-4. **Holdback's side of the vault as the buyer** (section 12):
+4. **The vault as the buyer:** built on Crest's side (section 19). Holdback's side (section 12):
     - **The schema change is decided (2026-11-19).** Holdback's schema v0.12 carries a contract buyer's longer signature, and its operators read a contract buyer, built by the standing-offers sessions in Holdback.
       - To "Add a contract buyer, such as a Crest vault, to T-549's schema v0.12?" the maintainer said "Yes, add it".
       - To "Should a vault that buys (a contract as the buyer) go into the same schema change as standing offers?" he said "Yes, same change".

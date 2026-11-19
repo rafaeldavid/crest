@@ -21,7 +21,8 @@
 // HOLDBACK_DEPLOYMENT (a test chain's deployment file, as JSON) or Sepolia's pin, CREST_RPC, CREST_VAULT, CREST_MODULE,
 // CREST_KEY_FILE (the agent's key file: privateKey and encryptionSecretKey, kept where the agent cannot read it),
 // CREST_STORE (a folder for each purchase's key store), CREST_GAS_KEY (the helper that pays gas), CROW_EXPECT as for
-// Holdback's buy-with-signer. Exit status: 0 done, 1 error, 2 usage, 3 stopped for approval, 5 refused by the vault.
+// Holdback's buy-with-signer, CREST_BUYER (agent, the default, or vault), and with CREST_BUYER=vault, CREST_DEAL_KEY_FILE
+// (the deal's decryption key, encryptionSecretKey, a copy of which the principal keeps). Exit status: 0 done, 1 error, 2 usage, 3 stopped for approval, 5 refused by the vault.
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { agentModule, buyerSigner, chains, crestAbi, encode, fundingErrors, verify, viem, type J } from './holdback.ts';
@@ -78,10 +79,24 @@ const vault = env('CREST_VAULT').toLowerCase();
  */
 const BUYER = (process.env['CREST_BUYER'] || 'agent') as 'agent' | 'vault';
 if (BUYER !== 'agent' && BUYER !== 'vault') throw new Error(`CREST_BUYER is agent or vault, not ${BUYER}`);
-if (BUYER === 'vault') { console.error('CREST_BUYER=vault: the vault as the buyer is not built yet (Crest\'s next build). Nothing is signed or paid.'); process.exit(2); }
 const module = env('CREST_MODULE').toLowerCase();
 const store = env('CREST_STORE');
 const keyFile = JSON.parse(readFileSync(env('CREST_KEY_FILE'), 'utf8')) as { privateKey: string; encryptionSecretKey: string };
+/**
+ * The deal's decryption key: the one the seller encrypts the delivered work to. With the agent's key as the buyer it is
+ * the agent's own (CREST_KEY_FILE). With the vault as the buyer the default is a key the principal also holds
+ * (CREST_DEAL_KEY_FILE, which the company writes and keeps a copy of), so the principal can read the delivered work
+ * when it steps in on a deal after stopping the agent (Crest's design record, section 19). Holdback binds the key
+ * envelope to the buyer's address and leaves the key itself to the parties, so this is the client's choice to make.
+ */
+const encryptionSecretKey = BUYER === 'vault'
+  ? (JSON.parse(readFileSync(env('CREST_DEAL_KEY_FILE'), 'utf8')) as { encryptionSecretKey?: string }).encryptionSecretKey ?? ''
+  : keyFile.encryptionSecretKey;
+if (!encryptionSecretKey) throw new Error(BUYER === 'vault' ? 'CREST_DEAL_KEY_FILE holds no encryptionSecretKey: your company sets it' : 'CREST_KEY_FILE holds no encryptionSecretKey');
+if (BUYER === 'vault') {
+  console.error("CREST_BUYER=vault: Crest's contracts take the vault as the buyer, and Holdback's operators read a contract buyer's signature once its schema v0.12 lands (T-549). This command signs as the vault after that. Nothing is signed or paid.");
+  process.exit(2);
+}
 const agentAccount = v.accounts.privateKeyToAccount(keyFile.privateKey);
 const me = agentAccount.address.toLowerCase();
 const operators = env('HOLDBACK_OPERATORS').split(',').map((s: string) => s.trim()).filter(Boolean);
@@ -99,7 +114,7 @@ function newPurchase(): { dir: string; saved: J } {
   mkdirSync(store, { recursive: true, mode: 0o700 });
   const dir = join(store, `p-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`);
   mkdirSync(dir, { mode: 0o700 });
-  const saved = { version: 1, address: me, privateKey: keyFile.privateKey, encryptionSecretKey: keyFile.encryptionSecretKey, createdAt: new Date().toISOString(), paymentAddress: vault };
+  const saved = { version: 1, address: me, privateKey: keyFile.privateKey, encryptionSecretKey, createdAt: new Date().toISOString(), paymentAddress: vault };
   const file = join(dir, `${me}.json`);
   writeFileSync(file, `${JSON.stringify(saved, null, 2)}\n`, { mode: 0o600 });
   chmodSync(file, 0o600);
@@ -191,7 +206,7 @@ function decodeRevert(e: J): { name: string; grant?: bigint; raw: string } {
 async function fundingCall(signer: J, p: { dir: string; saved: J }, id: string, total: bigint) {
   const pin = knownPins().find((x: J) => x.chain && x.domain.chainId === chainId);
   if (!pin) throw new Error(`no pinned deployment for chain ${chainId}: set HOLDBACK_DEPLOYMENT`);
-  const agent = new Agent(operators, keyFile.privateKey, new Uint8Array(Buffer.from(keyFile.encryptionSecretKey, 'base64url')), pin.domain, pin.chain);
+  const agent = new Agent(operators, keyFile.privateKey, new Uint8Array(Buffer.from(encryptionSecretKey, 'base64url')), pin.domain, pin.chain);
   const terms = p.saved.checked.terms;
   const nonces = p.saved.funding?.nonces;
   const { slots } = await agent.prepareAgreeAndFund(terms, total, { paymentAddress: vault, ...(nonces ? { nonces } : {}) });

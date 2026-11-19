@@ -35,6 +35,15 @@ import {AuthCaptureEscrow} from "commerce-payments/AuthCaptureEscrow.sol";
 ///         the charged amount, with the module's deadline and nonce, for the rest of the transaction. It answers
 ///         ERC-1271 to the token only, and only for that digest, so no key's own signature ever moves the vault's money.
 ///
+///         The vault as the buyer. A deal may name the vault itself as its buyer as well as its payer, so that a
+///         stop reaches the agent's signature on funded deals. The vault then answers ERC-1271 for the venue's buyer
+///         messages, through a module it enabled that rebuilds each message's digest (`ICrestBuyerModule`). Its
+///         signature is `abi.encode(module, message, ecdsa)`: `message` is the calldata of one of that module's message
+///         views, and `ecdsa` a key's 65-byte signature of the digest. For a deal this vault paid through that module,
+///         the key must sign for the grant that paid it (`signsFor`). Before the deal is paid, for the terms and the
+///         agreement, the deal must name this vault as buyer and payer and the key's own grant must pass `checkPath`
+///         for it: a dry run, since only `charge` lets the vault's money move.
+///
 ///         Signed grants. Whoever may grant under a parent may instead sign a `SignedGrant` under this vault's EIP-712
 ///         domain, which names the vault and the chain, and anyone may submit it with `grantBySig`. The vault checks it
 ///         as `grant` checks its caller, at submission, and it lands as an ordinary grant for the key it names, so the
@@ -277,7 +286,16 @@ interface ICrestVault {
     /// @return owed What was paid.
     function collectFee() external returns (uint256 owed);
 
-    /// @notice ERC-1271: yes to the token only, for a digest `charge` approved in this transaction.
+    /// @notice ERC-1271. To the token: yes only for a digest `charge` approved in this transaction, whatever the
+    ///         signature. To anyone else: yes for a buyer message, as "The vault as the buyer" above describes, when
+    ///         - the module named is enabled at the top vault and rebuilds exactly `hash` from `message`, naming this
+    ///           vault as the buyer;
+    ///         - for a deal this vault paid through that module, the key that signed `hash` signs for the grant that paid
+    ///           it (`signsFor`);
+    ///         - for a deal not yet paid, the message comes before funding, names this vault as the payer, and the key's
+    ///           own grant passes `checkPath` for the amount, its fee included, and the counterparty.
+    ///         A signature of 65 bytes or fewer is a no. One that does not decode, or a message the module refuses,
+    ///         makes the call revert, which a caller reads as a no.
     function isValidSignature(bytes32 hash, bytes calldata signature) external view returns (bytes4);
 
     // Views
@@ -297,6 +315,15 @@ interface ICrestVault {
     /// @notice Reverts when any grant on `id`'s path, here or in an ancestor vault, is closed, paused or expired, or may
     ///         not delegate.
     function checkDelegable(uint256 id) external view;
+
+    /// @notice Whether `who` signs for the deals of grant `id` when the vault is the buyer: it is this top vault's
+    ///         principal, or it controls a grant on `id`'s path, here or in an ancestor vault, whose own path is live
+    ///         (`pathLive`). So a stop on a grant, or anywhere above it, silences that grant's controller and everyone
+    ///         below it, and authority above the stop signs instead.
+    function signsFor(address who, uint256 id) external view returns (bool);
+
+    /// @notice Whether every grant on `id`'s path, here and in every ancestor vault, is open, unpaused and unexpired.
+    function pathLive(uint256 id) external view returns (bool);
 
     /// @notice The payee pinned for `module` at the top vault; 0 when it is not enabled.
     function payeeOf(address module) external view returns (address);
@@ -329,4 +356,30 @@ interface ICrestList {
 ///         payer-only `reclaim` after the escrow's expiry.
 interface ICrestEscrowModule {
     function escrow() external view returns (address);
+}
+
+/// @notice A module that lets a vault be its venue's buyer: it rebuilds the digest of a buyer message from the message's
+///         fields, so the vault checks a signature without knowing the venue.
+interface ICrestBuyerModule {
+    /// @notice What a buyer message names.
+    /// @param digest The EIP-712 digest the venue asks its buyer to sign.
+    /// @param commitment The venue's ID for the deal, the one `charge` records.
+    /// @param buyer The buyer the message names.
+    /// @param beforeFunding True for a message the buyer signs before the deal is paid: the terms and the agreement.
+    /// @param payer Before funding: the address that pays the deal. Otherwise 0.
+    /// @param amount Before funding: what the deal charges its payer, before Crest's fee. Otherwise 0.
+    /// @param counterparty Before funding: the counterparty `charge` checks the lists against. Otherwise 0.
+    struct BuyerMessage {
+        bytes32 digest;
+        bytes32 commitment;
+        address buyer;
+        bool beforeFunding;
+        address payer;
+        uint256 amount;
+        bytes32 counterparty;
+    }
+
+    /// @notice Rebuilds the buyer message `message`, the calldata of one of the module's message views. Reverts for any
+    ///         other call, or for fields that do not decode.
+    function buyerMessage(bytes calldata message) external view returns (BuyerMessage memory);
 }
