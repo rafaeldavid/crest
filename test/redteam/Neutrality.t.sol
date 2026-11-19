@@ -31,7 +31,7 @@ contract RedTeamNeutralityTest is RedTeamBase {
         bytes32 id = _fundVia(t, BUYER_PK);
         vm.startPrank(principal);
         vault.close(agentGrant, "");
-        vault.allow(agentGrant, _merchant(), false, "");
+        allowList.set(vault, agentGrant, _merchant(), false, "");
         vault.setModule(address(module), address(0), "");
         vault.withdraw(principal, usdc.balanceOf(address(vault)), "");
         vm.stopPrank();

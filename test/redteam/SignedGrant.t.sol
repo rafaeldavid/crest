@@ -6,10 +6,17 @@ import {IHoldbackRules} from "holdback/IHoldbackRules.sol";
 import {HoldbackTypes as H} from "holdback/HoldbackTypes.sol";
 
 import {CrestVault} from "../../src/CrestVault.sol";
-import {ICrestVault} from "../../src/ICrestVault.sol";
+import {ICrestList, ICrestVault} from "../../src/ICrestVault.sol";
 import {RedTeamBase, RedTeamMulticall3} from "./RedTeamBase.sol";
 
 /// Code an EIP-7702 account delegates to. It would refuse every ERC-1271 question and counts every call it gets.
+/// A merchant list that allows every counterparty.
+contract AllowEveryList {
+    function allows(address, uint256, bytes32) external pure returns (bytes4) {
+        return ICrestList.allows.selector;
+    }
+}
+
 contract RefusingAccountCode {
     uint256 public calls;
 
@@ -29,10 +36,10 @@ contract RefusingAccountCode {
 /// so in its description, with the line in `src/` that lets it through.
 contract RedTeamSignedGrantTest is RedTeamBase {
     bytes32 internal constant CAPS_TYPEHASH = keccak256(
-        "Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool restricted,bool mayDelegate)"
+        "Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool mayDelegate,address list)"
     );
     bytes32 internal constant SIGNED_GRANT_TYPEHASH = keccak256(
-        "SignedGrant(uint256 parent,address controller,Caps caps,bytes32 salt,bytes32[] counterparties,uint40 deadline,bytes note)Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool restricted,bool mayDelegate)"
+        "SignedGrant(uint256 parent,address controller,Caps caps,bytes32 salt,uint40 deadline,bytes note)Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool mayDelegate,address list)"
     );
     bytes32 internal constant DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
@@ -58,7 +65,6 @@ contract RedTeamSignedGrantTest is RedTeamBase {
                 s.controller,
                 keccak256(abi.encode(CAPS_TYPEHASH, s.caps)),
                 s.salt,
-                keccak256(abi.encodePacked(s.counterparties)),
                 s.deadline,
                 keccak256(s.note)
             )
@@ -82,21 +88,17 @@ contract RedTeamSignedGrantTest is RedTeamBase {
         return _sigOn(pk, v, LOCAL_CHAIN, s);
     }
 
-    /// A slip with the test merchant and one other on its list, a 30-day deadline and a note.
+    /// A slip with a 30-day deadline and a note.
     function _slipFor(uint256 parentId, address controller, ICrestVault.Caps memory caps, bytes32 salt)
         internal
         view
         returns (ICrestVault.SignedGrant memory s)
     {
-        bytes32[] memory cps = new bytes32[](2);
-        cps[0] = _merchant();
-        cps[1] = keccak256("another merchant");
         s = ICrestVault.SignedGrant({
             parent: parentId,
             controller: controller,
             caps: caps,
             salt: salt,
-            counterparties: cps,
             deadline: uint40(vm.getBlockTimestamp() + 30 days),
             note: "red team"
         });
@@ -106,9 +108,9 @@ contract RedTeamSignedGrantTest is RedTeamBase {
         return uint256(keccak256(abi.encode(s.parent, s.controller, s.salt)));
     }
 
-    /// One deal of one hold, ever; the test merchant only; no delegating.
-    function _oneDeal() internal pure returns (ICrestVault.Caps memory) {
-        return _caps(HOLD, HOLD, HOLD, 1, true, false);
+    /// One deal of one hold, ever; no list of its own, so the agent's list above bounds whom it pays; no delegating.
+    function _oneDeal() internal view returns (ICrestVault.Caps memory) {
+        return _caps(HOLD, HOLD, HOLD, 1, false, false);
     }
 
     function _land(uint256 pk, CrestVault v, ICrestVault.SignedGrant memory s) internal returns (uint256) {
@@ -179,7 +181,7 @@ contract RedTeamSignedGrantTest is RedTeamBase {
         uint256 narrow = vault.grant(
             agentGrant, sub, _caps(HOLD / 2, HOLD / 2, HOLD / 2, 1, true, false), bytes32("narrow"), "half a hold"
         );
-        vault.allow(narrow, _merchant(), true, "");
+        allowList.set(vault, narrow, _merchant(), true, "");
         vm.stopPrank();
 
         vm.prank(sub);
@@ -388,16 +390,15 @@ contract RedTeamSignedGrantTest is RedTeamBase {
         assertEq(twin.grantOf(sub), 0);
     }
 
-    /// A slip in the child vault grants the sub-agent wide limits and lists a second merchant. Its payments are still
-    /// bound by the agent's grant in the parent vault: per payment and by its allow list.
+    /// A slip in the child vault grants the sub-agent wide limits and a list that allows every merchant. Its payments are
+    /// still bound by the agent's grant in the parent vault: per payment and by its list.
     function test_attack_aSlipInAChildVaultPaysPastTheParentVaultsLimits_refused() public {
         CrestVault child = _child();
         vm.prank(buyer);
         vault.fundChild(address(child), 2 * HOLD, "");
         address otherPayout = makeAddr("other payout");
         ICrestVault.SignedGrant memory s = _slipFor(ROOT, sub, _wide(), "wide in the child");
-        s.counterparties[1] = module.counterpartyOf(otherPayout, adjudicator, fallbackAdj, appealAdj);
-        s.caps.restricted = true;
+        s.caps.list = address(new AllowEveryList());
         _land(BUYER_PK, child, s);
 
         H.Terms memory big = _vterms(address(child), sub);
@@ -420,16 +421,16 @@ contract RedTeamSignedGrantTest is RedTeamBase {
         child.grantBySig(s, sig);
     }
 
-    // 5. The listed counterparties
+    // 5. A wider list on the slip
 
-    /// The agent's grant allows the test merchant only. Its slip lists a second merchant on the sub-agent's grant, which
-    /// `allow` could also do on that grant. A payment to the second merchant is refused at the agent's grant.
+    /// The agent's grant allows the test merchant only. Its slip points the sub-agent's grant at a list that allows every
+    /// merchant, which `setCaps` could also do on that grant. A payment to a second merchant is refused at the agent's
+    /// grant.
     function test_attack_aSlipListsAMerchantTheSignersGrantDoesNot_paymentRefused() public {
         address otherPayout = makeAddr("other payout");
         ICrestVault.SignedGrant memory s = _slipFor(agentGrant, sub, _oneDeal(), "list wider");
-        s.counterparties[1] = module.counterpartyOf(otherPayout, adjudicator, fallbackAdj, appealAdj);
+        s.caps.list = address(new AllowEveryList());
         _land(BUYER_PK, vault, s);
-        assertTrue(vault.allowed(_idOf(s), s.counterparties[1]));
         H.Terms memory t = _vterms(address(vault), sub);
         t.sellerPayoutAddress = otherPayout;
         _expectRefused(t, SUB_PK, abi.encodeWithSelector(ICrestVault.CounterpartyNotAllowed.selector, agentGrant));
@@ -481,7 +482,7 @@ contract RedTeamSignedGrantTest is RedTeamBase {
     function test_attack_aTombstoneNamingAnotherKey_givesAndTakesNothing() public {
         vm.startPrank(principal);
         uint256 sub2Grant = vault.grant(ROOT, sub2, _oneDeal(), bytes32("sub2"), "");
-        vault.allow(sub2Grant, _merchant(), true, "");
+        allowList.set(vault, sub2Grant, _merchant(), true, "");
         vm.stopPrank();
         vm.startPrank(buyer);
         vault.cancelSignedGrant(agentGrant, principal, bytes32("t1"), "");
@@ -626,9 +627,6 @@ contract RedTeamSignedGrantTest is RedTeamBase {
         vm.prank(principal);
         uint256 parentId = v.grant(ROOT, buyer, _wide(), 0, "");
         assertEq(parentId, 90916188481540811617180516143261187678914691542848256238469456329746153149125);
-        bytes32[] memory cps = new bytes32[](2);
-        cps[0] = keccak256("merchant one");
-        cps[1] = keccak256("merchant two");
         ICrestVault.SignedGrant memory s = ICrestVault.SignedGrant({
             parent: parentId,
             controller: sub,
@@ -639,52 +637,40 @@ contract RedTeamSignedGrantTest is RedTeamBase {
                 maxOpen: 1,
                 period: 86_400,
                 expiresAt: 1_790_086_400,
-                restricted: true,
-                mayDelegate: false
+                mayDelegate: false,
+                list: address(0x1157)
             }),
             salt: bytes32("cast"),
-            counterparties: cps,
             deadline: 1_790_003_600,
             note: "signed by cast"
         });
         bytes memory walletSig =
-            hex"8f9b378145bf45e765c8f3f7a492d794a191bbe46e2aa9cecbf0b6c472d3a79457e63f6a8f3ce239f1b8685200c6701da30c4c312dcd2d9a1dce9a730425f1bc1c";
+            hex"158b09077210ec4eedcb756e61aa81fa704544504aead67d943bde068eb2e2fe343639c2b64c400d7d5b896b3a8eb4d750b6d8c07a3d20b9cca4ae48df2ea50e1c";
 
         assertEq(v.grantBySig(s, walletSig), _idOf(s));
         assertEq(v.grantOf(sub), _idOf(s));
-        assertTrue(v.allowed(_idOf(s), cps[1]));
         assertEq(keccak256(walletSig), keccak256(_sig(BUYER_PK, at, s)), "this file's encoding is the wallet's");
     }
 
-    /// Slips that a naive packed encoding would confuse (an entry moved from the list into the note, or two limits
-    /// swapped) have different digests: one's signature does not land the other.
+    /// Slips that a naive packed encoding would confuse (two limits swapped, or a list moved into the note) have
+    /// different digests: one's signature does not land the other.
     function test_attack_twoSlipsThatPackAlike_doNotShareADigest() public {
-        ICrestVault.SignedGrant memory a = _slipFor(agentGrant, sub, _oneDeal(), "twins");
-        a.note = "";
-        ICrestVault.SignedGrant memory b = _slipFor(agentGrant, sub, _oneDeal(), "twins");
-        bytes32[] memory one = new bytes32[](1);
-        one[0] = a.counterparties[0];
-        b.counterparties = one;
-        b.note = abi.encodePacked(a.counterparties[1]);
-        ICrestVault.SignedGrant memory c = _slipFor(agentGrant, sub, _oneDeal(), "twins");
-        c.counterparties = new bytes32[](0);
-        c.note = abi.encodePacked(a.counterparties[0], a.counterparties[1]);
         ICrestVault.SignedGrant memory d = _slipFor(agentGrant, sub, _oneDeal(), "twins");
         d.note = "";
         d.caps = _caps(HOLD, 2 * HOLD, HOLD, 1, true, false);
         ICrestVault.SignedGrant memory e = _slipFor(agentGrant, sub, _oneDeal(), "twins");
         e.note = "";
         e.caps = _caps(2 * HOLD, HOLD, HOLD, 1, false, true);
-        bytes memory aSig = _sig(BUYER_PK, address(vault), a);
+        ICrestVault.SignedGrant memory f = _slipFor(agentGrant, sub, _oneDeal(), "twins");
+        f.caps = _caps(HOLD, 2 * HOLD, HOLD, 1, false, false);
+        f.note = abi.encodePacked(address(allowList));
         bytes memory dSig = _sig(BUYER_PK, address(vault), d);
 
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.grantBySig(b, aSig);
-        vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.grantBySig(c, aSig);
-        vm.expectRevert(ICrestVault.NotAuthorized.selector);
         vault.grantBySig(e, dSig);
-        vault.grantBySig(a, aSig);
+        vm.expectRevert(ICrestVault.NotAuthorized.selector);
+        vault.grantBySig(f, dSig);
+        vault.grantBySig(d, dSig);
     }
 
     /// A submitter rewrites the calldata of a valid slip with dirty bits in the padding of a signed field: the key, the
@@ -693,8 +679,8 @@ contract RedTeamSignedGrantTest is RedTeamBase {
         ICrestVault.SignedGrant memory s = _slipFor(agentGrant, sub, _oneDeal(), "dirty");
         bytes memory clean = abi.encodeCall(vault.grantBySig, (s, _sig(BUYER_PK, address(vault), s)));
         // Offsets in the calldata: the slip's tuple starts at 0x44; `controller` at 0x64, `caps.maxOpen` at 0xe4,
-        // `caps.restricted` at 0x144 (its last byte 0x163), `deadline` at 0x1c4.
-        uint256[4] memory at = [uint256(0x64), 0xe4, 0x163, 0x1c4];
+        // `caps.mayDelegate` at 0x144 (its last byte 0x163), `deadline` at 0x1a4.
+        uint256[4] memory at = [uint256(0x64), 0xe4, 0x163, 0x1a4];
         uint8[4] memory put = [uint8(0x01), 0x01, 0x02, 0x01];
         for (uint256 i; i < 4; ++i) {
             bytes memory dirty = bytes.concat(clean);
@@ -815,50 +801,39 @@ contract RedTeamSignedGrantTest is RedTeamBase {
 
     // 10. Gas griefing
 
-    /// The signer lists 200 counterparties to make the grant dear to use. The list costs whoever submits the slip, once,
-    /// and the gas of each further entry is logged; a payment through the grant costs the same with a list of 1 or 200.
-    function test_attack_gasGriefingByALongList_costsOnlyItsSubmitter() public {
-        bytes32[] memory few = new bytes32[](1);
-        few[0] = _merchant();
-        bytes32[] memory many = new bytes32[](200);
-        for (uint256 i; i < 199; ++i) {
-            many[i] = keccak256(abi.encode("filler", i));
-        }
-        many[199] = _merchant();
-        ICrestVault.SignedGrant memory a = _slipFor(agentGrant, sub, _oneDeal(), "few");
-        a.counterparties = few;
-        ICrestVault.SignedGrant memory b = _slipFor(agentGrant, sub2, _oneDeal(), "many");
-        b.counterparties = many;
+    /// The signer writes a 6,400-byte note to make the slip dear to use. The note costs whoever submits the slip, once;
+    /// a payment through the grant costs the same with a short note or a long one.
+    function test_attack_gasGriefingByALongNote_costsOnlyItsSubmitter() public {
+        ICrestVault.SignedGrant memory a = _slipFor(agentGrant, sub, _oneDeal(), "short");
+        ICrestVault.SignedGrant memory b = _slipFor(agentGrant, sub2, _oneDeal(), "long");
+        b.note = new bytes(6_400);
         bytes memory aSig = _sig(BUYER_PK, address(vault), a);
         bytes memory bSig = _sig(BUYER_PK, address(vault), b);
 
         uint256 snap = vm.snapshotState();
         uint256 g = gasleft();
         vault.grantBySig(a, aSig);
-        uint256 landFew = g - gasleft();
+        uint256 landShort = g - gasleft();
         vm.revertToState(snap);
         g = gasleft();
         vault.grantBySig(b, bSig);
-        uint256 landMany = g - gasleft();
+        uint256 landLong = g - gasleft();
         vault.grantBySig(a, aSig);
-        emit log_named_uint("a slip with 1 counterparty, execution gas", landFew);
-        emit log_named_uint("a slip with 200 counterparties, execution gas", landMany);
-        emit log_named_uint("each further counterparty, execution gas", (landMany - landFew) / 199);
+        emit log_named_uint("a slip with a short note, execution gas", landShort);
+        emit log_named_uint("a slip with a 6,400-byte note, execution gas", landLong);
 
         bytes memory callA = _fundCall(_vterms(address(vault), sub), SUB_PK);
         bytes memory callB = _fundCall(_vterms(address(vault), sub2), SUB2_PK);
         snap = vm.snapshotState();
         g = gasleft();
         (bool okA,) = address(module).call(callA);
-        uint256 payFew = g - gasleft();
+        uint256 payShort = g - gasleft();
         vm.revertToState(snap);
         g = gasleft();
         (bool okB,) = address(module).call(callB);
-        uint256 payMany = g - gasleft();
+        uint256 payLong = g - gasleft();
         assertTrue(okA && okB);
-        emit log_named_uint("a payment, list of 1, execution gas", payFew);
-        emit log_named_uint("a payment, list of 200, execution gas", payMany);
-        assertApproxEqAbs(payMany, payFew, 3_000, "a long list made a payment dearer");
+        assertApproxEqAbs(payLong, payShort, 3_000, "a long note made a payment dearer");
     }
 
     // 11. Money in a hold
@@ -946,22 +921,15 @@ contract RedTeamSignedGrantTest is RedTeamBase {
         vm.prank(signer);
         (bool okTx, bytes memory errTx) =
             address(v).call(abi.encodeCall(v.grant, (parentId, controller, caps, salt, s.note)));
-        bool listedTx = okTx;
-        for (uint256 i; okTx && i < s.counterparties.length; ++i) {
-            vm.prank(signer);
-            (bool okAllow,) = address(v).call(abi.encodeCall(v.allow, (id, s.counterparties[i], true, s.note)));
-            listedTx = listedTx && okAllow;
-        }
-        bytes32 afterTx = _stateOf(v, id, controller, held, s.counterparties);
+        bytes32 afterTx = _stateOf(v, id, controller, held);
         vm.revertToState(snap);
 
         (bool okSig, bytes memory errSig) = address(v).call(abi.encodeCall(v.grantBySig, (s, sig)));
-        bytes32 afterSig = _stateOf(v, id, controller, held, s.counterparties);
+        bytes32 afterSig = _stateOf(v, id, controller, held);
 
         bool fresh = held == 0 && controller != buyer && controller != sub && controller != principal;
         if (okSig) {
             assertTrue(okTx, "a slip landed where its signer's grant by transaction would not");
-            assertTrue(listedTx, "the slip listed a counterparty its signer could not list by allow");
             assertEq(afterSig, afterTx, "the slip left another state than the grant by transaction");
         } else if (okTx) {
             assertFalse(fresh, "a slip for a fresh key was refused where its signer's grant by transaction lands");
@@ -972,15 +940,8 @@ contract RedTeamSignedGrantTest is RedTeamBase {
         vm.revertToState(snap);
     }
 
-    function _stateOf(CrestVault v, uint256 id, address controller, uint256 held, bytes32[] memory cps)
-        internal
-        view
-        returns (bytes32 h)
-    {
-        h = keccak256(abi.encode(v.getGrant(id), v.grantOf(controller), v.getGrant(held)));
-        for (uint256 i; i < cps.length; ++i) {
-            h = keccak256(abi.encode(h, v.allowed(id, cps[i])));
-        }
+    function _stateOf(CrestVault v, uint256 id, address controller, uint256 held) internal view returns (bytes32) {
+        return keccak256(abi.encode(v.getGrant(id), v.grantOf(controller), v.getGrant(held)));
     }
 
     function _signerKey(uint8 who) internal pure returns (uint256) {

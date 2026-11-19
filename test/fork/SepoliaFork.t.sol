@@ -47,7 +47,7 @@ contract SepoliaForkTest is CrestBase {
         vm.startPrank(principal);
         vault.setModule(address(module), module.payee(), "");
         agentGrant = vault.grant(ROOT, buyer, _caps(HOLD, 3 * HOLD, type(uint128).max, 2, true, true), 0, "");
-        vault.allow(agentGrant, _merchant(), true, "");
+        allowList.set(vault, agentGrant, _merchant(), true, "");
         vm.stopPrank();
         usdc.mint(address(vault), 2 * HOLD);
     }

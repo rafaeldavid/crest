@@ -77,7 +77,7 @@ contract HierarchyTest is CrestBase {
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
         vault.setCaps(subGrant, _wide(), "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.allow(agentGrant, itself, true, "");
+        allowList.set(vault, agentGrant, itself, true, "");
         vm.stopPrank();
     }
 

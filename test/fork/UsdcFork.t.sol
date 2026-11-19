@@ -63,8 +63,8 @@ contract UsdcForkTest is Test {
                 maxOpen: 10,
                 period: 1 days,
                 expiresAt: 0,
-                restricted: false,
-                mayDelegate: false
+                mayDelegate: false,
+                list: address(0)
             }),
             0,
             ""

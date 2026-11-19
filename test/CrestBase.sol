@@ -5,6 +5,7 @@ import {Base} from "holdback-test/unit/Base.sol";
 import {IHoldbackRules} from "holdback/IHoldbackRules.sol";
 import {HoldbackTypes as H} from "holdback/HoldbackTypes.sol";
 
+import {CrestAllowList} from "../src/CrestAllowList.sol";
 import {CrestFactory} from "../src/CrestFactory.sol";
 import {CrestVault} from "../src/CrestVault.sol";
 import {ICrestVault} from "../src/ICrestVault.sol";
@@ -27,6 +28,7 @@ abstract contract CrestBase is Base {
     address internal sub;
     address internal sub2;
     address internal stranger;
+    CrestAllowList internal allowList;
     CrestFactory internal factory;
     HoldbackModule internal module;
     CrestVault internal vault;
@@ -38,17 +40,19 @@ abstract contract CrestBase is Base {
         sub = vm.addr(SUB_PK);
         sub2 = vm.addr(SUB2_PK);
         stranger = makeAddr("stranger");
+        allowList = new CrestAllowList();
         factory = new CrestFactory(0, address(0));
         module = new HoldbackModule(rules);
         vault = CrestVault(factory.create(principal, address(usdc), bytes32(0)));
         vm.startPrank(principal);
         vault.setModule(address(module), module.payee(), "");
         agentGrant = vault.grant(ROOT, buyer, _caps(HOLD, 3 * HOLD, type(uint128).max, 2, true, true), 0, "");
-        vault.allow(agentGrant, _merchant(), true, "");
+        allowList.set(vault, agentGrant, _merchant(), true, "");
         vm.stopPrank();
         usdc.mint(address(vault), 1_000 * HOLD);
     }
 
+    /// `restricted` points the grant at the default list (`allowList`); otherwise it names no list.
     function _caps(
         uint256 perSpend,
         uint256 perPeriod,
@@ -56,7 +60,7 @@ abstract contract CrestBase is Base {
         uint32 maxOpen,
         bool restricted,
         bool mayDelegate
-    ) internal pure returns (ICrestVault.Caps memory) {
+    ) internal view returns (ICrestVault.Caps memory) {
         return ICrestVault.Caps({
             perSpend: uint128(perSpend),
             perPeriod: uint128(perPeriod),
@@ -64,12 +68,12 @@ abstract contract CrestBase is Base {
             maxOpen: maxOpen,
             period: 1 days,
             expiresAt: 0,
-            restricted: restricted,
-            mayDelegate: mayDelegate
+            mayDelegate: mayDelegate,
+            list: restricted ? address(allowList) : address(0)
         });
     }
 
-    function _wide() internal pure returns (ICrestVault.Caps memory) {
+    function _wide() internal view returns (ICrestVault.Caps memory) {
         return _caps(type(uint128).max, type(uint128).max, type(uint128).max, type(uint32).max, false, true);
     }
 

@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {CrestVault} from "../src/CrestVault.sol";
+import {ICrestAllowList} from "../src/ICrestAllowList.sol";
 import {ICrestVault} from "../src/ICrestVault.sol";
 import {CrestBase} from "./CrestBase.sol";
 
@@ -32,9 +33,9 @@ contract EventsTest is CrestBase {
         vm.expectEmit(true, true, true, true, address(vault));
         emit ICrestVault.PausedSet(agentGrant, true, principal, NOTE);
         vault.setPaused(agentGrant, true, NOTE);
-        vm.expectEmit(true, true, true, true, address(vault));
-        emit ICrestVault.Allowed(agentGrant, m, false, principal, NOTE);
-        vault.allow(agentGrant, m, false, NOTE);
+        vm.expectEmit(true, true, true, true, address(allowList));
+        emit ICrestAllowList.Allowed(address(vault), agentGrant, m, false, principal, NOTE);
+        allowList.set(vault, agentGrant, m, false, NOTE);
         vm.expectEmit(true, true, true, true, address(vault));
         emit ICrestVault.Closed(agentGrant, principal, NOTE);
         vault.close(agentGrant, NOTE);
