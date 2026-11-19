@@ -21,7 +21,7 @@ export async function startSepolia(o: { keys: string; crestRecord: string; log?:
   const keys = JSON.parse(readFileSync(o.keys, 'utf8')) as { principal: string; gas: string };
   const rpc = process.env['CREST_SEPOLIA_RPC'] || PUBLIC_RPC;
   const chain = v.defineChain({ id: SEPOLIA, name: 'Sepolia', nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: { default: { http: [rpc] } } });
-  const publicClient = v.createPublicClient({ chain, transport: v.http(rpc), cacheTime: 0 });
+  const publicClient = v.createPublicClient({ chain, transport: v.http(rpc, { retryCount: 6, retryDelay: 1500 }), cacheTime: 0 });
   const chainId = await publicClient.getChainId();
   if (chainId !== SEPOLIA) throw new Error(`the RPC answers chain ${chainId}, not Sepolia: nothing is sent`);
   if (Number(deployment.chainId) !== SEPOLIA || Number(crest.chainId) !== SEPOLIA) throw new Error('a deployment record names another chain than Sepolia');
@@ -39,8 +39,11 @@ export async function startSepolia(o: { keys: string; crestRecord: string; log?:
     if (eth === 0n) throw new Error(`the ${who} ${a} holds no Sepolia ETH: ask the coordinator for some`);
   }
   const send = async (key: string, to: string, abi: J[], fn: string, args: unknown[]) => {
-    const w = v.createWalletClient({ account: v.accounts.privateKeyToAccount(key), chain, transport: v.http(rpc) });
-    const hash = await w.writeContract({ address: to, abi, functionName: fn, args, gas: 3_000_000n });
+    const account = v.accounts.privateKeyToAccount(key);
+    const w = v.createWalletClient({ account, chain, transport: v.http(rpc, { retryCount: 6, retryDelay: 1500 }) });
+    // Sepolia's own estimate, and half again: its gas costs differ from a local EVM's.
+    const est = await publicClient.estimateContractGas({ address: to, abi, functionName: fn, args, account });
+    const hash = await w.writeContract({ address: to, abi, functionName: fn, args, gas: (est * 3n) / 2n });
     const r = await publicClient.waitForTransactionReceipt({ hash, timeout: 180_000 });
     if (r.status !== 'success') throw new Error(`${fn} on ${to} reverted (${hash})`);
     return r;
