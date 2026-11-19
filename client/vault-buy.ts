@@ -62,6 +62,15 @@ const chainId = await publicClient.getChainId();
 if (MAINNET_CHAIN_IDS.includes(chainId)) throw new Error(`the RPC answers chain ${chainId}, a mainnet: vault-buy runs on a local chain or a test network only`);
 const chain = v.defineChain({ id: chainId, name: `chain ${chainId}`, nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: { default: { http: [rpc] } } });
 const vault = env('CREST_VAULT').toLowerCase();
+/**
+ * Who the deal's buyer is: one setting. `agent` (today): the agent's key is the buyer and signs the agreement, and the vault
+ * is only the payment address. `vault`: the vault itself is the buyer, so its owner can act on a funded deal; Crest's
+ * next build, which Holdback's operators must also support (a contract buyer). The buyer is named in two places: the key
+ * file each purchase writes (newPurchase: its key signs as the buyer) and the quote, which sends that key's address.
+ */
+const BUYER = (process.env['CREST_BUYER'] || 'agent') as 'agent' | 'vault';
+if (BUYER !== 'agent' && BUYER !== 'vault') throw new Error(`CREST_BUYER is agent or vault, not ${BUYER}`);
+if (BUYER === 'vault') { console.error('CREST_BUYER=vault: the vault as the buyer is not built yet (Crest\'s next build). Nothing is signed or paid.'); process.exit(2); }
 const module = env('CREST_MODULE').toLowerCase();
 const store = env('CREST_STORE');
 const keyFile = JSON.parse(readFileSync(env('CREST_KEY_FILE'), 'utf8')) as { privateKey: string; encryptionSecretKey: string };
@@ -116,7 +125,7 @@ async function grantWords(p: { vault: string; id: bigint; g: J; isAgent: boolean
   const now = BigInt(Math.floor(Date.now() / 1000));
   const period = BigInt(c.period);
   const window = now / period;
-  const inPeriod = BigInt(p.g.periodIndex) === window ? BigInt(p.g.inPeriod) : 0n;
+  const inPeriod = BigInt(p.g.windowEnd) > window * period ? BigInt(p.g.inPeriod) : 0n; // a window counts until its end time
   return {
     grant: p.id.toString(), vault: p.vault, yours: p.isAgent, controller: p.g.controller, paused: p.g.paused, closed: p.g.closed,
     perPayment: limitText(BigInt(c.perSpend), MAX.u128),

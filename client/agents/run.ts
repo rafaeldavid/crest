@@ -8,7 +8,7 @@
 // Needs HOLDBACK_ROOT (a built Holdback checkout with forge build output in contracts/out), anvil on PATH and forge
 // build output here. A live buyer reads only the agents' own keys: HOLDBACK_AGENT_ANTHROPIC_API_KEY, or
 // HOLDBACK_AGENT_OPENAI_COMPATIBLE_API_KEY with HOLDBACK_AGENT_OPENAI_COMPATIBLE_BASE_URL. Test tokens only.
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -16,7 +16,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { holdbackRoot, viem, type J } from '../holdback.ts';
 import { MAX128, OPEN, Principal, VAULT_ABI, type Caps } from './principal.ts';
-import { SCENARIOS, type Check, type Ctx, type Scenario } from './scenarios.ts';
+import { BUYER, SCENARIOS, type Check, type Ctx, type Scenario } from './scenarios.ts';
 import { GAS_HELPER, startWorld, type LocalWorld } from './world.ts';
 
 const root = holdbackRoot();
@@ -29,6 +29,7 @@ const duet = {
   measures: await load('tools/duet/measures.ts'),
   world: await load('tools/duet/world.ts'),
 };
+const crestCommit = (() => { try { return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fileURLToPath(new URL('../..', import.meta.url)), encoding: 'utf8' }).trim(); } catch { return 'unknown'; } })();
 const VAULT_BUY = fileURLToPath(new URL('../vault-buy.ts', import.meta.url));
 const PAGE = readFileSync(new URL('../docs/pay-through-a-vault.txt', import.meta.url), 'utf8');
 const CROW_SITE = 'https://crow.direct';
@@ -147,9 +148,9 @@ try {
     const grant = await principal.grant(agent.address, grantCaps as Caps, { why: `scenario ${s.n}` });
     if (allowMerchant && grantCaps.restricted) await principal.allow(grant, merchant, 'Crow test seller with the demo adjudicators');
     await principal.fund(20n * H);
-    rec.add('runner', 'scenario.start', { n: s.n, name: s.name, title: s.title, expect: s.expect, vault: principal.vault, principal: principal.address, agent: agent.address, grant: grant.toString(), caps: JSON.parse(JSON.stringify(grantCaps, (_k, x) => (typeof x === 'bigint' ? x.toString() : x))), hold: H.toString(), buyer: buyerSide, model: model?.id ?? 'scripted', world: { engine: `anvil (chain ${w.chainId}) with Holdback's contracts, the operators' own code, Crow's test seller`, operators: w.operators, rules: w.rules, factory: w.factory, module: w.module } });
+    rec.add('runner', 'scenario.start', { n: s.n, name: s.name, title: s.title, expect: s.expect, vault: principal.vault, principal: principal.address, agent: agent.address, grant: grant.toString(), caps: JSON.parse(JSON.stringify(grantCaps, (_k, x) => (typeof x === 'bigint' ? x.toString() : x))), hold: H.toString(), buyerIs: BUYER, crest: crestCommit, buyer: buyerSide, model: model?.id ?? 'scripted', world: { engine: `anvil (chain ${w.chainId}) with Holdback's contracts, the operators' own code, Crow's test seller`, operators: w.operators, rules: w.rules, factory: w.factory, module: w.module } });
 
-    const envFor = (who: { file: string; store: string }, vault: string) => ({ HOLDBACK_ROOT: root, HOLDBACK_DEPLOYMENT: w.deploymentJson, CREST_RPC: w.rpc, CREST_VAULT: vault, CREST_MODULE: w.module, CREST_KEY_FILE: who.file, CREST_STORE: who.store, CREST_GAS_KEY: GAS_HELPER });
+    const envFor = (who: { file: string; store: string }, vault: string) => ({ HOLDBACK_ROOT: root, HOLDBACK_DEPLOYMENT: w.deploymentJson, CREST_RPC: w.rpc, CREST_VAULT: vault, CREST_MODULE: w.module, CREST_KEY_FILE: who.file, CREST_STORE: who.store, CREST_GAS_KEY: GAS_HELPER, CREST_BUYER: BUYER });
     const policy = { budget: (5n * H).toString(), requiredChecks: [], checkBodies: {}, latestDeliverySec: 7200, decisionSlackSec: 1800, createdAtBandSec: 600 };
     const shownIn = (store: string, id: string): J => {
       for (const d of (() => { try { return readdirSync(store); } catch { return []; } })()) {
@@ -305,7 +306,7 @@ try {
       c.check('scenario ran to its end', 'yes', `no: ${(e as Error).message.slice(0, 300)}`);
     }
     rec.add('runner', 'scenario.end', { checks, worldErrors: w.errors.splice(0) });
-    const summary = { scenario: s.n, name: s.name, title: s.title, expect: s.expect, model: model?.id ?? 'scripted', matched: checks.every((x) => x.match), checks, sessions: sessionRows };
+    const summary = { scenario: s.n, name: s.name, crest: crestCommit, buyerIs: BUYER, title: s.title, expect: s.expect, model: model?.id ?? 'scripted', matched: checks.every((x) => x.match), checks, sessions: sessionRows };
     writeFileSync(join(dir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
     return [summary];
   }

@@ -4,6 +4,9 @@
 // H is the hold of one purchase (price plus the adjudication fee), read from a probe quote when the world starts.
 import { MAX128, OPEN, Principal, type Caps } from './principal.ts';
 
+/** Who the deal's buyer is, for every scenario: the agent's key (the baseline), or the vault (Crest's next build). */
+export const BUYER: 'agent' | 'vault' = 'agent';
+
 export interface Check { label: string; expected: string; got: string; match: boolean; note?: string }
 
 export interface Ctx {
