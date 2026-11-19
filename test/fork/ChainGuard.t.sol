@@ -6,6 +6,7 @@ import {HoldbackRules} from "holdback/HoldbackRules.sol";
 
 import {Deploy} from "../../script/Deploy.s.sol";
 import {CrestFactory} from "../../src/CrestFactory.sol";
+import {ICrestVault} from "../../src/ICrestVault.sol";
 import {HoldbackModule} from "../../src/modules/holdback/HoldbackModule.sol";
 
 /// Which chain the deploy script deploys to. Forge simulates a script with `block.chainid` 31337 from foundry.toml
@@ -58,7 +59,12 @@ contract DeployOnSepoliaTest is ChainGuardBase {
         vm.removeFile(path);
         bytes32 salt = keccak256("crest v01");
         bytes memory moduleCode = abi.encodePacked(type(HoldbackModule).creationCode, abi.encode(RULES));
-        bytes memory factoryInit = abi.encodePacked(type(CrestFactory).creationCode, abi.encode(uint256(0), address(0)));
+        // The fee the script reads from `CREST_FEE_BPS` and `CREST_FEE_SWEEPER`, so the rehearsal runs with the real
+        // deploy's settings when they are set.
+        (uint256 feeBps, address feeSweeper) = script.feeOf();
+        assertEq(ICrestVault(f.IMPLEMENTATION()).FEE_BPS(), feeBps);
+        assertEq(ICrestVault(f.IMPLEMENTATION()).FEE_SWEEPER(), feeSweeper);
+        bytes memory factoryInit = abi.encodePacked(type(CrestFactory).creationCode, abi.encode(feeBps, feeSweeper));
         assertEq(address(f), vm.computeCreate2Address(salt, keccak256(factoryInit)));
         assertEq(address(m), vm.computeCreate2Address(salt, keccak256(moduleCode)));
     }
