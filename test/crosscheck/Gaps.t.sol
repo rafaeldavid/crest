@@ -82,12 +82,12 @@ contract CrossCheckGapsTest is RedTeamBase {
     // X-L1. A longer period keeps the spend of the last window paid in when that window falls inside the new one.
 
     function test_attack_lengthenThePeriodTheDayAfter_agentPassesTheNewWeeklyLimit_refused() public {
-        uint256 week = block.timestamp / 7 days;
+        uint256 week = vm.getBlockTimestamp() / 7 days;
         for (uint256 i; i < 3; i++) {
             _fundVia(_vterms(address(vault), buyer), BUYER_PK);
         }
-        vm.warp((block.timestamp / 1 days + 1) * 1 days); // the next day, the same week
-        assertEq(block.timestamp / 7 days, week, "the same week");
+        vm.warp((vm.getBlockTimestamp() / 1 days + 1) * 1 days); // the next day, the same week
+        assertEq(vm.getBlockTimestamp() / 7 days, week, "the same week");
 
         ICrestVault.Caps memory weekly = _caps(HOLD, 4 * HOLD, type(uint128).max, 100, true, true);
         weekly.period = 7 days;
@@ -107,7 +107,7 @@ contract CrossCheckGapsTest is RedTeamBase {
         for (uint256 i; i < 3; i++) {
             _fundVia(_vterms(address(vault), buyer), BUYER_PK);
         }
-        vm.warp((block.timestamp / 1 days + 1) * 1 days);
+        vm.warp((vm.getBlockTimestamp() / 1 days + 1) * 1 days);
         for (uint256 i; i < 3; i++) {
             _fundVia(_vterms(address(vault), buyer), BUYER_PK);
         }

@@ -25,7 +25,10 @@ contract SepoliaForkTest is CrestBase {
             vm.skip(true);
             return;
         }
-        vm.createSelectFork(url);
+        // A public node can lag at its head; `CREST_FORK_BLOCK` forks at a block behind it.
+        uint256 at = vm.envOr("CREST_FORK_BLOCK", uint256(0));
+        if (at == 0) vm.createSelectFork(url);
+        else vm.createSelectFork(url, at);
         uint256 forkTime = vm.getBlockTimestamp();
         super.setUp();
         vm.chainId(11_155_111);
