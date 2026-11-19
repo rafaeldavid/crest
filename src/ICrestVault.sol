@@ -18,9 +18,9 @@ import {AuthCaptureEscrow} from "commerce-payments/AuthCaptureEscrow.sol";
 ///         grant. A controller above a grant, at any level, may pause, resume, close or set the limits of that grant
 ///         and list its counterparties; a closed grant's controller loses that authority, though in a child vault it
 ///         made it still manages grants that cannot pay. A grant's own controller may pause or close itself and, while
-///         its path is open and its grant allows it, grant children and create and fill child vaults. It never widens,
-///         resumes or reopens its own grant. Anyone above a paused grant can lift the pause, so pause or close an
-///         agent's own grant to stop all below it. Closing frees the key, not the grant; any granter may reuse the key.
+///         every grant on its path is open and may delegate, grant children and create and fill child vaults. It never
+///         widens, resumes or reopens its own grant. Anyone above a paused grant can lift the pause, so pause or close
+///         an agent's own grant to stop all below it. Closing frees the key, not the grant; any granter may reuse it.
 ///
 ///         Child vaults. A grant's controller may create a child vault through this vault, be its principal for good,
 ///         and fill it from this vault within the grant's period and total limits. The child's root extends that grant:
@@ -51,10 +51,10 @@ interface ICrestVault {
     /// @param lifetime The most this grant may ever pay, child-vault funding included.
     /// @param maxOpen How many commitments may be open at once.
     /// @param period A period's length in seconds; a period is `floor(block.timestamp / period)`, so 86,400 is a UTC
-    ///        day. Must not be 0. A new period length keeps the current window's spend.
+    ///        day. Must not be 0. A new length keeps the spend of the last window paid in if it overlaps the new one.
     /// @param expiresAt No payment from this instant on (unix seconds); 0 for no expiry.
     /// @param restricted True: a payment must name a counterparty on this grant's own allow list.
-    /// @param mayDelegate True: the grant's controller may grant children and create and fill child vaults.
+    /// @param mayDelegate False: no one delegates at or below it, except the top vault's principal granting.
     struct Caps {
         uint128 perSpend;
         uint128 perPeriod;
@@ -66,7 +66,9 @@ interface ICrestVault {
         bool mayDelegate;
     }
 
-    /// @notice A grant and its counters. `paused` can be lifted from above; `closed` is permanent.
+    /// @notice A grant and its counters. `paused` can be lifted from above; `closed` is permanent. `inPeriod` counts the
+    ///         window that ends at `windowEnd` (unix seconds) and counts while that end is after the current window's
+    ///         start; a new period length only moves `windowEnd` back to the end of the new current window.
     struct Grant {
         uint256 parent;
         address controller;
@@ -75,7 +77,7 @@ interface ICrestVault {
         Caps caps;
         uint128 inPeriod;
         uint128 spent;
-        uint40 periodIndex;
+        uint40 windowEnd;
         uint32 open;
     }
 
@@ -164,9 +166,9 @@ interface ICrestVault {
 
     // The tree
 
-    /// @notice Grants `controller` a child of `parentId` with `caps`. By `parentId`'s controller when its grant may
-    ///         delegate and its path is open, or by anyone with authority above `parentId`. The ID is
-    ///         `keccak256(parentId, controller, salt)`.
+    /// @notice Grants `controller` a child of `parentId` with `caps`, by `parentId`'s controller or authority above it
+    ///         while its path may delegate; the top principal needs only authority. A grant the key holds closes if the
+    ///         caller is above it. The ID is `keccak256(parentId, controller, salt)`.
     /// @return id The new grant's ID.
     function grant(uint256 parentId, address controller, Caps calldata caps, bytes32 salt, bytes calldata note)
         external
@@ -188,15 +190,13 @@ interface ICrestVault {
     // Child vaults
 
     /// @notice Creates a child vault whose principal is grant `grantId`'s controller, through the factory, or returns
-    ///         it when it exists. By that controller when its grant may delegate, or by authority above it, while no
-    ///         grant on its path here or in an ancestor vault is paused, closed or expired. A top vault's root creates
-    ///         no child.
+    ///         it when it exists. By that controller or authority above it, while every grant on its path here and in
+    ///         ancestor vaults is open, unexpired and may delegate. A top vault's root creates no child.
     /// @return child The child vault's address.
     function createChild(uint256 grantId, bytes32 salt, bytes calldata note) external returns (address child);
 
-    /// @notice Moves `amount` into `child`, charged to the path of the grant that created it for its state, expiry,
-    ///         period and total limits, while no grant above it in an ancestor vault is paused, closed or expired. By
-    ///         that grant's controller when its grant may delegate, or by authority above it.
+    /// @notice Moves `amount` into `child`, charged to the period and total limits of the path of the grant that
+    ///         created it. By that grant's controller or authority above it, on the same terms as `createChild`.
     function fundChild(address child, uint256 amount, bytes calldata note) external;
 
     /// @notice Has `child` send `amount` back to this vault. By the grant's controller or authority above it.
@@ -247,8 +247,9 @@ interface ICrestVault {
     ///         ancestor vault, for state, expiry, per-payment limit and allow lists. Counts nothing.
     function checkPath(uint256 id, uint256 amount, bytes32 counterparty) external view;
 
-    /// @notice Reverts when any grant on `id`'s path, here or in an ancestor vault, is closed, paused or expired.
-    function checkState(uint256 id) external view;
+    /// @notice Reverts when any grant on `id`'s path, here or in an ancestor vault, is closed, paused or expired, or may
+    ///         not delegate.
+    function checkDelegable(uint256 id) external view;
 
     /// @notice The payee pinned for `module` at the top vault; 0 when it is not enabled.
     function payeeOf(address module) external view returns (address);

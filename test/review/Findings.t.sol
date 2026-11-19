@@ -54,8 +54,8 @@ contract ReviewFindingsTest is CrestBase {
         _expectRefused(_vterms(address(child), sub), SUB_PK, abi.encodeWithSelector(ICrestVault.Paused.selector, ROOT));
     }
 
-    /// R2. `fundChild` checks the state of this vault's path only, not the ancestor vaults' (`_requireUsable` and
-    /// `checkState` exist for that, and `createChild` uses them). After the principal stops the agent in the top vault,
+    /// R2. `fundChild` checks the state of this vault's path only, not the ancestor vaults' (`_requireDelegable` and
+    /// `checkDelegable` exist for that, and `createChild` uses them). After the principal stops the agent in the top vault,
     /// the agent still moves the child's money into a grandchild.
     function test_attack_fundAGrandchildAfterTheTopStopsTheAgent_refused() public {
         vm.prank(buyer);

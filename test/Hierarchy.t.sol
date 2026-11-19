@@ -88,10 +88,16 @@ contract HierarchyTest is CrestBase {
         vault.grant(agentGrant, sub2, _wide(), 0, "");
     }
 
+    /// A key holds one live grant. Authority above its grant may grant it anew, which closes the old grant in the same
+    /// transaction; anyone else is refused, the grant's own controller included.
     function test_attack_oneKeyTwoGrants_refused() public {
-        vm.prank(principal);
+        vm.prank(buyer);
         vm.expectRevert(ICrestVault.GrantExists.selector);
-        vault.grant(ROOT, sub, _wide(), bytes32("other"), "");
+        vault.grant(agentGrant, buyer, _wide(), bytes32("other"), "");
+        vm.prank(principal);
+        uint256 moved = vault.grant(ROOT, sub, _wide(), bytes32("other"), "");
+        assertEq(vault.grantOf(sub), moved);
+        assertTrue(_grantOf(vault, subGrant).closed, "the key's old grant closed");
     }
 
     function test_attack_aZeroPeriod_refused() public {
