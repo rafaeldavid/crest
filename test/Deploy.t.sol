@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity 0.8.28;
 
+import {VmSafe} from "forge-std/Vm.sol";
 import {HoldbackRules} from "holdback/HoldbackRules.sol";
 import {HoldbackTypes as H} from "holdback/HoldbackTypes.sol";
 import {IHoldbackRules} from "holdback/IHoldbackRules.sol";
@@ -21,7 +22,9 @@ contract DeployHarness is Deploy {
         (chain, localRules) = (chain_, localRules_);
     }
 
-    function rpcChainId() public view override returns (uint256) {
+    /// In a test it answers with `chain`; run any other way, as a script, it asks the RPC as `Deploy` does.
+    function rpcChainId() public override returns (uint256) {
+        if (!vm.isContext(VmSafe.ForgeContext.TestGroup)) return super.rpcChainId();
         return chain;
     }
 
@@ -67,6 +70,19 @@ contract DeployTest is CrestBase {
             H.Funding({signature: new bytes(65)})
         );
         assertEq(uint8(_stage(id)), uint8(IHoldbackRules.Stage.Held));
+    }
+
+    /// A deploy that stopped after the factory: the rerun creates only the module.
+    function test_aRerunAfterAPartialDeploy_createsOnlyWhatIsMissing() public {
+        (CrestFactory pf, HoldbackModule pm) = script.addresses(rules);
+        (bool ok,) = CREATE2_FACTORY.call(abi.encodePacked(keccak256("crest v01"), type(CrestFactory).creationCode));
+        assertTrue(ok);
+        assertGt(address(pf).code.length, 0);
+        assertEq(address(pm).code.length, 0);
+        (CrestFactory f, HoldbackModule m) = script.run();
+        assertEq(address(f), address(pf));
+        assertEq(address(m), address(pm));
+        assertGt(address(pm).code.length, 0);
     }
 
     function test_aRerunDeploysNothingAgain_andReturnsTheSameContracts() public {
