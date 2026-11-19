@@ -11,6 +11,7 @@ import {ICrestEscrowModule, ICrestVault} from "./ICrestVault.sol";
 
 interface IERC3009Domain {
     function DOMAIN_SEPARATOR() external view returns (bytes32);
+    function authorizationState(address authorizer, bytes32 nonce) external view returns (bool);
 }
 
 /// @title CrestVault
@@ -29,6 +30,12 @@ contract CrestVault is ICrestVault, EIP712 {
     uint256 internal constant HALF_N = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
     bytes4 internal constant ERC1271_MAGIC = 0x1626ba7e;
     bytes4 internal constant ERC1271_NO = 0xffffffff;
+    /// Transient slots: whether this vault approved a payment earlier in this transaction, and that payment's nonce.
+    bytes32 internal constant PENDING_SET_SLOT = keccak256("crest.vault.pending.set");
+    bytes32 internal constant PENDING_NONCE_SLOT = keccak256("crest.vault.pending.nonce");
+
+    uint256 public immutable FEE_BPS;
+    address public immutable FEE_SWEEPER;
 
     address public principal;
     address public pendingPrincipal;
@@ -45,8 +52,13 @@ contract CrestVault is ICrestVault, EIP712 {
     mapping(address module => address payee) internal _payees;
     /// Keys whose grant here closed, and previous principals: a signed grant never names one.
     mapping(address key => bool) internal _retired;
+    uint256 public feeOwed;
 
-    constructor() {
+    /// The factory's fee, fixed in the implementation every clone of it runs.
+    constructor(uint256 feeBps, address feeSweeper) {
+        if (feeBps > 10_000 || (feeBps != 0 && feeSweeper == address(0))) revert InvalidFee();
+        FEE_BPS = feeBps;
+        FEE_SWEEPER = feeSweeper;
         principal = address(1);
     }
 
@@ -112,6 +124,7 @@ contract CrestVault is ICrestVault, EIP712 {
     /// @inheritdoc ICrestVault
     function withdraw(address to, uint256 amount, bytes calldata note) external {
         _requireTopPrincipal();
+        _requireAboveFee(amount);
         emit Withdrawn(to, amount, note);
         SafeTransferLib.safeTransfer(token, to, amount);
     }
@@ -230,6 +243,7 @@ contract CrestVault is ICrestVault, EIP712 {
         if (id == 0) revert UnknownChild();
         if (!authorityOver(msg.sender, id)) revert NotAuthorized();
         _requireDelegable(id);
+        _requireAboveFee(amount);
         uint128 a = _amount(amount);
         for (uint256 g = id; g != 0; g = _grants[g].parent) {
             _chargeOne(g, a, bytes32(0), false);
@@ -252,6 +266,7 @@ contract CrestVault is ICrestVault, EIP712 {
         address p = parent;
         if (p == address(0)) revert NotChildVault();
         if (msg.sender != p && !authorityOver(msg.sender, ROOT)) revert NotAuthorized();
+        _requireAboveFee(amount);
         emit ReturnedToParent(p, amount, msg.sender, note);
         SafeTransferLib.safeTransfer(token, p, amount);
     }
@@ -273,11 +288,13 @@ contract CrestVault is ICrestVault, EIP712 {
         if (leaf == 0) revert NoGrant();
         if (_opens[commitment].module != address(0)) revert CommitmentOpen();
         uint128 a = _amount(amount);
+        uint128 total = FEE_BPS == 0 ? a : _withFee(leaf, a, nonce);
         for (uint256 g = leaf; g != 0; g = _grants[g].parent) {
-            _chargeOne(g, a, counterparty, true);
+            _chargeOne(g, total, counterparty, true);
         }
         _opens[commitment] = Open({grant: leaf, amount: a, module: msg.sender});
-        if (parent != address(0)) ICrestVault(parent).checkPath(parentGrant, amount, counterparty);
+        if (parent != address(0)) ICrestVault(parent).checkPath(parentGrant, total, counterparty);
+        if (FEE_BPS != 0) _owe(leaf, a, total - a);
         bytes32 digest = keccak256(
             abi.encodePacked(
                 "\x19\x01",
@@ -320,6 +337,15 @@ contract CrestVault is ICrestVault, EIP712 {
         uint256 before = SafeTransferLib.balanceOf(token, address(this));
         AuthCaptureEscrow(escrow).reclaim(paymentInfo);
         emit Reclaimed(module, escrow, SafeTransferLib.balanceOf(token, address(this)) - before);
+    }
+
+    /// @inheritdoc ICrestVault
+    function collectFee() external returns (uint256 owed) {
+        owed = feeOwed;
+        if (owed == 0) return 0;
+        feeOwed = 0;
+        emit FeeCollected(FEE_SWEEPER, owed, msg.sender);
+        if (owed != 0) SafeTransferLib.safeTransfer(token, FEE_SWEEPER, owed);
     }
 
     /// @inheritdoc ICrestVault
@@ -464,6 +490,48 @@ contract CrestVault is ICrestVault, EIP712 {
         if (parent == address(0)) return;
         if (payment) ICrestVault(parent).checkPath(parentGrant, amount, counterparty);
         else ICrestVault(parent).checkDelegable(parentGrant);
+    }
+
+    /// With a fee, refuses a move that would leave less than the fee owed. At a rate of 0 nothing is ever owed.
+    function _requireAboveFee(uint256 amount) internal view {
+        if (FEE_BPS == 0) return;
+        uint256 owed = feeOwed;
+        if (owed != 0 && SafeTransferLib.balanceOf(token, address(this)) < amount + owed) revert BalanceBelowFee();
+    }
+
+    /// A payment of `a` with its fee, refused by name when the two would not fit in a `uint128`.
+    function _withFee(uint256 leaf, uint128 a, bytes32 nonce) internal returns (uint128) {
+        uint256 total = uint256(a) + uint256(a) * FEE_BPS / 10_000;
+        if (total > type(uint128).max) revert OverPerSpend(leaf);
+        _requireNoPendingApproval(nonce);
+        return uint128(total);
+    }
+
+    /// Adds a payment's fee to what the vault owes, then refuses the payment if the balance would fall below it.
+    function _owe(uint256 leaf, uint128 a, uint128 fee) internal {
+        if (fee != 0) {
+            feeOwed += fee;
+            emit FeeOwed(leaf, fee);
+        }
+        _requireAboveFee(a);
+    }
+
+    /// With a fee, refuses a second approval in one transaction while the token has not yet spent the first, so every
+    /// balance check sees every earlier payment's pull. Then records this approval's nonce.
+    function _requireNoPendingApproval(bytes32 nonce) internal {
+        bytes32 setSlot = PENDING_SET_SLOT;
+        bytes32 nonceSlot = PENDING_NONCE_SLOT;
+        uint256 set;
+        bytes32 last;
+        assembly {
+            set := tload(setSlot)
+            last := tload(nonceSlot)
+        }
+        if (set != 0 && !IERC3009Domain(token).authorizationState(address(this), last)) revert ApprovalPending();
+        assembly {
+            tstore(setSlot, 1)
+            tstore(nonceSlot, nonce)
+        }
     }
 
     function _requireExists(uint256 id) internal view {

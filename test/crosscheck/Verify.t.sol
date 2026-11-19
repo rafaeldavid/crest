@@ -219,7 +219,7 @@ contract CrossCheckCarryFuzzTest is Test {
     function setUp() public {
         vm.warp(1_790_000_000);
         token = new MockERC3009Token("Mock USDC", "mUSDC", 6);
-        CrestFactory factory = new CrestFactory();
+        CrestFactory factory = new CrestFactory(0, address(0));
         vault = CrestVault(factory.create(principal, address(token), 0));
         module = new PayModule(address(token));
         vm.prank(principal);
