@@ -6,6 +6,7 @@ import {HoldbackRules} from "holdback/HoldbackRules.sol";
 
 import {CrestFactory} from "../src/CrestFactory.sol";
 import {CrestVault} from "../src/CrestVault.sol";
+import {ICrestFeeSweeper} from "../src/ICrestFeeSweeper.sol";
 import {HoldbackModule} from "../src/modules/holdback/HoldbackModule.sol";
 
 /// @title Deploy
@@ -18,7 +19,8 @@ import {HoldbackModule} from "../src/modules/holdback/HoldbackModule.sol";
 ///      `block.chainid` reads `chain_id` from foundry.toml (31337) whatever the RPC, so the script never trusts it
 ///      [measured, 2026-11-19, forge 1.0.0]. On Sepolia the rules contract is the one in Holdback's own record at the
 ///      commit the submodule pins; on a local chain it is `HOLDBACK_RULES`. `CREST_RECORD`, optional, moves the
-///      record, so a rehearsal never writes `deployments/11155111.json`.
+///      record, so a rehearsal never writes `deployments/11155111.json`. The factory's fee comes from
+///      `CREST_FEE_BPS` and `CREST_FEE_SWEEPER`, both 0 when unset; a rate above 0 needs a sweeper contract.
 contract Deploy is Script {
     uint256 internal constant SEPOLIA = 11_155_111;
     uint256 internal constant LOCAL = 31_337;
@@ -47,9 +49,21 @@ contract Deploy is Script {
         if (chainId == SEPOLIA && address(rules) != address(rulesFor(SEPOLIA))) {
             revert CheckFailed("not the rules contract in Holdback's Sepolia record");
         }
+        (uint256 feeBps, address feeSweeper) = feeOf();
+        if (feeBps != 0 && feeSweeper.code.length == 0) revert CheckFailed("a fee needs a sweeper contract");
+        if (feeBps != 0) {
+            try ICrestFeeSweeper(feeSweeper).DESTINATION() returns (address d) {
+                if (d == address(0)) revert CheckFailed("the sweeper names no destination");
+            } catch {
+                revert CheckFailed("the sweeper names no destination");
+            }
+        }
         (factory, module) = addresses(rules);
         vm.startBroadcast();
-        if (address(factory).code.length == 0 && address(new CrestFactory{salt: SALT}()) != address(factory)) {
+        if (
+            address(factory).code.length == 0
+                && address(new CrestFactory{salt: SALT}(feeBps, feeSweeper)) != address(factory)
+        ) {
             revert CheckFailed("the factory is not at its CREATE2 address");
         }
         if (address(module).code.length == 0 && address(new HoldbackModule{salt: SALT}(rules)) != address(module)) {
@@ -75,10 +89,17 @@ contract Deploy is Script {
         return HoldbackRules(vm.envOr("HOLDBACK_RULES", address(0)));
     }
 
-    /// @notice Where the factory and the module for `rules` are, or will be.
-    function addresses(HoldbackRules rules) public pure returns (CrestFactory factory, HoldbackModule module) {
+    /// @notice The fee the factory fixes for every vault it creates.
+    function feeOf() public view virtual returns (uint256 feeBps, address feeSweeper) {
+        return (vm.envOr("CREST_FEE_BPS", uint256(0)), vm.envOr("CREST_FEE_SWEEPER", address(0)));
+    }
+
+    /// @notice Where the factory with this fee and the module for `rules` are, or will be.
+    function addresses(HoldbackRules rules) public view returns (CrestFactory factory, HoldbackModule module) {
+        (uint256 feeBps, address feeSweeper) = feeOf();
+        bytes memory factoryInit = abi.encodePacked(type(CrestFactory).creationCode, abi.encode(feeBps, feeSweeper));
         bytes memory moduleCode = abi.encodePacked(type(HoldbackModule).creationCode, abi.encode(rules));
-        factory = CrestFactory(vm.computeCreate2Address(SALT, keccak256(type(CrestFactory).creationCode)));
+        factory = CrestFactory(vm.computeCreate2Address(SALT, keccak256(factoryInit)));
         module = HoldbackModule(vm.computeCreate2Address(SALT, keccak256(moduleCode)));
     }
 
@@ -90,6 +111,10 @@ contract Deploy is Script {
         CrestVault implementation = CrestVault(factory.IMPLEMENTATION());
         if (address(implementation).code.length == 0) revert CheckFailed("the implementation has no code");
         if (implementation.principal() != address(1)) revert CheckFailed("the implementation can be initialized");
+        (uint256 feeBps, address feeSweeper) = feeOf();
+        if (implementation.FEE_BPS() != feeBps || implementation.FEE_SWEEPER() != feeSweeper) {
+            revert CheckFailed("the factory's fee is not the one asked");
+        }
         if (address(module.RULES()) != address(rules)) revert CheckFailed("the module names another rules contract");
         if (module.payee() != rules.ERC3009_COLLECTOR()) revert CheckFailed("the module pays another collector");
         if (module.escrow() != address(rules.ESCROW())) revert CheckFailed("the module names another escrow");
@@ -112,6 +137,8 @@ contract Deploy is Script {
         vm.serializeAddress(o, "implementation", factory.IMPLEMENTATION());
         vm.serializeAddress(o, "holdbackModule", address(module));
         vm.serializeBytes32(o, "salt", SALT);
+        vm.serializeUint(o, "feeBps", CrestVault(factory.IMPLEMENTATION()).FEE_BPS());
+        vm.serializeAddress(o, "feeSweeper", CrestVault(factory.IMPLEMENTATION()).FEE_SWEEPER());
         string memory json = vm.serializeUint(o, "checkedAtBlock", block.number);
         vm.writeJson(json, recordPath(chainId));
         console2.log("chainId", chainId);

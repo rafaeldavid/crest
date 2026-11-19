@@ -38,7 +38,7 @@ abstract contract CrestBase is Base {
         sub = vm.addr(SUB_PK);
         sub2 = vm.addr(SUB2_PK);
         stranger = makeAddr("stranger");
-        factory = new CrestFactory();
+        factory = new CrestFactory(0, address(0));
         module = new HoldbackModule(rules);
         vault = CrestVault(factory.create(principal, address(usdc), bytes32(0)));
         vm.startPrank(principal);

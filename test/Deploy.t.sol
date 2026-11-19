@@ -35,6 +35,11 @@ contract DeployHarness is Deploy {
     function recordPath(uint256) public pure override returns (string memory) {
         return "deployments/rehearsal-harness.json";
     }
+
+    /// A rate of 0 with no sweeper, whatever the shell's `CREST_FEE_*` say.
+    function feeOf() public view virtual override returns (uint256, address) {
+        return (0, address(0));
+    }
 }
 
 /// The deploy script on Holdback's test world: it deploys at the CREATE2 addresses its code gives, checks itself,
@@ -75,7 +80,11 @@ contract DeployTest is CrestBase {
     /// A deploy that stopped after the factory: the rerun creates only the module.
     function test_aRerunAfterAPartialDeploy_createsOnlyWhatIsMissing() public {
         (CrestFactory pf, HoldbackModule pm) = script.addresses(rules);
-        (bool ok,) = CREATE2_FACTORY.call(abi.encodePacked(keccak256("crest v01"), type(CrestFactory).creationCode));
+        (bool ok,) = CREATE2_FACTORY.call(
+            abi.encodePacked(
+                keccak256("crest v01"), type(CrestFactory).creationCode, abi.encode(uint256(0), address(0))
+            )
+        );
         assertTrue(ok);
         assertGt(address(pf).code.length, 0);
         assertEq(address(pm).code.length, 0);

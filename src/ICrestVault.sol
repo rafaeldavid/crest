@@ -35,9 +35,22 @@ import {AuthCaptureEscrow} from "commerce-payments/AuthCaptureEscrow.sol";
 ///         the charged amount, with the module's deadline and nonce, for the rest of the transaction. It answers
 ///         ERC-1271 to the token only, and only for that digest, so no key's own signature ever moves the vault's money.
 ///
+///         Signed grants. Whoever may grant under a parent may instead sign a `SignedGrant` under this vault's EIP-712
+///         domain, which names the vault and the chain, and anyone may submit it with `grantBySig`. The vault checks it
+///         as `grant` checks its caller, at submission, and it lands as an ordinary grant for the key it names, so the
+///         submitter gains nothing and only that key can pay through it. It is used once: its grant ID stays taken.
+///         Before use, `cancelSignedGrant` voids it and its deadline ends it; after use, close the grant.
+///
 ///         Notes. Every change a principal or a controller makes takes a `note`, carried in its event as given: a
 ///         reason, a ticket, or the hash of a document kept elsewhere. It is public, so a principal that wants the
 ///         reason private puts a hash there.
+///
+///         Fees. The factory fixes a rate (`FEE_BPS`, basis points) and a sweeper (`FEE_SWEEPER`) in every vault it
+///         creates, and nothing changes either afterwards. A payment owes `floor(amount × FEE_BPS / 10,000)` on top of
+///         itself; the fee counts with the payment against every limit on the path, so a payment that exactly meets a
+///         limit is refused once its fee is counted. The vault keeps what it owes (`feeOwed`), moves only the balance
+///         above it, and pays it to the sweeper on `collectFee`. It never calls the sweeper. At a rate of 0 nothing
+///         is owed. No fee on a deposit, a withdrawal, money coming back, or a move to or from a child vault.
 ///
 ///         Money already committed. A vault has no function that can move money a venue holds. Its only call into a
 ///         venue is a Commerce Payments escrow's payer-only `reclaim`, after that escrow's expiry, which returns money to
@@ -46,9 +59,9 @@ import {AuthCaptureEscrow} from "commerce-payments/AuthCaptureEscrow.sol";
 ///      initialized in one transaction by `CrestFactory`.
 interface ICrestVault {
     /// @notice What a grant allows. The largest value of a type means no limit of that kind.
-    /// @param perSpend The most one payment may be, in the token's base units.
+    /// @param perSpend The most one payment and its fee may be, in the token's base units.
     /// @param perPeriod The most the payments of one period may add up to.
-    /// @param lifetime The most this grant may ever pay, child-vault funding included.
+    /// @param lifetime The most this grant may ever pay, fees and child-vault funding included.
     /// @param maxOpen How many commitments may be open at once.
     /// @param period A period's length in seconds; a period is `floor(block.timestamp / period)`, so 86,400 is a UTC
     ///        day. Must not be 0. A new length keeps the spend of the last window paid in if it overlaps the new one.
@@ -79,6 +92,18 @@ interface ICrestVault {
         uint128 spent;
         uint40 windowEnd;
         uint32 open;
+    }
+
+    /// @notice A grant signed off chain: `grant`'s arguments, the counterparties its allow list starts with, and the last
+    ///         instant (unix seconds) it may be submitted.
+    struct SignedGrant {
+        uint256 parent;
+        address controller;
+        Caps caps;
+        bytes32 salt;
+        bytes32[] counterparties;
+        uint40 deadline;
+        bytes note;
     }
 
     /// @notice A commitment a module opened: which grant paid, how much, and which module may end it.
@@ -112,6 +137,8 @@ interface ICrestVault {
     event ChildTakenBack(address indexed child, uint256 indexed grant, uint256 amount, address indexed by, bytes note);
     event ReturnedToParent(address indexed parent, uint256 amount, address indexed by, bytes note);
     event Reclaimed(address indexed module, address indexed escrow, uint256 amount);
+    event FeeOwed(uint256 indexed grant, uint256 fee);
+    event FeeCollected(address indexed sweeper, uint256 amount, address indexed by);
 
     // Errors. A refusal by a limit names the grant that refused.
 
@@ -139,6 +166,12 @@ interface ICrestVault {
     error OverLifetime(uint256 grant);
     error TooManyOpen(uint256 grant);
     error CounterpartyNotAllowed(uint256 grant);
+    error BadGrantSignature();
+    error KeyNotFresh();
+    error InvalidFee();
+    error BalanceBelowFee();
+    error ApprovalPending();
+    error SignedGrantExpired();
 
     // Setup
 
@@ -174,6 +207,18 @@ interface ICrestVault {
         external
         returns (uint256 id);
 
+    /// @notice Lands `signed` as `grant` would for its signer, and lists its counterparties, by anyone until its
+    ///         deadline, for a fresh key: one that has never held a grant here, nor been this vault's principal. A key
+    ///         that held one is granted again, or moved, by transaction. `signature` is a 65-byte ECDSA signature with
+    ///         a low `s`: a contract controller grants by transaction.
+    /// @return id The new grant's ID.
+    function grantBySig(SignedGrant calldata signed, bytes calldata signature) external returns (uint256 id);
+
+    /// @notice Voids an unused signed grant by taking its ID, which then holds a closed grant, emitting `Closed` with no
+    ///         `Granted` before it. By anyone with authority over the existing grant `parentId`, even while paused or
+    ///         unable to delegate, so a signer can always void its own slips; another salt avoids an ID it takes.
+    function cancelSignedGrant(uint256 parentId, address controller, bytes32 salt, bytes calldata note) external;
+
     /// @notice Sets the limits of grant `id`. By anyone with authority above it.
     function setCaps(uint256 id, Caps calldata caps, bytes calldata note) external;
 
@@ -208,7 +253,7 @@ interface ICrestVault {
 
     // Payments
 
-    /// @notice An enabled module charges `controller`'s grant and every grant above it with `amount` for
+    /// @notice An enabled module charges `controller`'s grant and every grant above it with `amount` and its fee for
     ///         `counterparty`, opens `commitment` (the venue's own ID for this payment: for Holdback, the deal's
     ///         commitment ID), and has the vault approve one ERC-3009 authorization of exactly
     ///         `amount` to the module's pinned payee, valid before `validBefore`, with `nonce`.
@@ -230,6 +275,10 @@ interface ICrestVault {
     ///         returns the money to the vault.
     function reclaim(address module, AuthCaptureEscrow.PaymentInfo calldata paymentInfo) external;
 
+    /// @notice Anyone has the vault pay `feeOwed` to `FEE_SWEEPER`, zeroing it first.
+    /// @return owed What was paid.
+    function collectFee() external returns (uint256 owed);
+
     /// @notice ERC-1271: yes to the token only, for a digest `charge` approved in this transaction.
     function isValidSignature(bytes32 hash, bytes calldata signature) external view returns (bytes4);
 
@@ -243,8 +292,8 @@ interface ICrestVault {
     ///         principal.
     function isAbove(address who, uint256 id) external view returns (bool);
 
-    /// @notice Reverts as `charge` would for `amount` and `counterparty` on grant `id`'s path, here and in every
-    ///         ancestor vault, for state, expiry, per-payment limit and allow lists. Counts nothing.
+    /// @notice Reverts as `charge` would for `amount`, its fee included, and `counterparty` on grant `id`'s path,
+    ///         here and in every ancestor vault, for state, expiry, per-payment limit and allow lists. Counts nothing.
     function checkPath(uint256 id, uint256 amount, bytes32 counterparty) external view;
 
     /// @notice Reverts when any grant on `id`'s path, here or in an ancestor vault, is closed, paused or expired, or may
@@ -255,6 +304,9 @@ interface ICrestVault {
     function payeeOf(address module) external view returns (address);
 
     function principal() external view returns (address);
+    function FEE_BPS() external view returns (uint256);
+    function FEE_SWEEPER() external view returns (address);
+    function feeOwed() external view returns (uint256);
     function pendingPrincipal() external view returns (address);
     function token() external view returns (address);
     function factory() external view returns (address);

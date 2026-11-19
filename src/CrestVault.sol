@@ -2,6 +2,8 @@
 pragma solidity 0.8.28;
 
 import {AuthCaptureEscrow} from "commerce-payments/AuthCaptureEscrow.sol";
+import {ECDSA} from "solady/utils/ECDSA.sol";
+import {EIP712} from "solady/utils/EIP712.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 
 import {ICrestFactory} from "./ICrestFactory.sol";
@@ -9,16 +11,31 @@ import {ICrestEscrowModule, ICrestVault} from "./ICrestVault.sol";
 
 interface IERC3009Domain {
     function DOMAIN_SEPARATOR() external view returns (bytes32);
+    function authorizationState(address authorizer, bytes32 nonce) external view returns (bool);
 }
 
 /// @title CrestVault
 /// @notice A principal's vault and its tree of grants. `ICrestVault` describes every function, event and error.
-contract CrestVault is ICrestVault {
+contract CrestVault is ICrestVault, EIP712 {
     uint256 public constant ROOT = 1;
     bytes32 internal constant RECEIVE_WITH_AUTHORIZATION_TYPEHASH =
         0xd099cc98ef71107a616c4f0f941f04c322d8e254fe26b3c6668db87aae413de8;
+    bytes32 internal constant CAPS_TYPEHASH = keccak256(
+        "Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool restricted,bool mayDelegate)"
+    );
+    bytes32 internal constant SIGNED_GRANT_TYPEHASH = keccak256(
+        "SignedGrant(uint256 parent,address controller,Caps caps,bytes32 salt,bytes32[] counterparties,uint40 deadline,bytes note)Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool restricted,bool mayDelegate)"
+    );
+    /// The largest `s` of a non-malleable secp256k1 signature, `n / 2`.
+    uint256 internal constant HALF_N = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
     bytes4 internal constant ERC1271_MAGIC = 0x1626ba7e;
     bytes4 internal constant ERC1271_NO = 0xffffffff;
+    /// Transient slots: whether this vault approved a payment earlier in this transaction, and that payment's nonce.
+    bytes32 internal constant PENDING_SET_SLOT = keccak256("crest.vault.pending.set");
+    bytes32 internal constant PENDING_NONCE_SLOT = keccak256("crest.vault.pending.nonce");
+
+    uint256 public immutable FEE_BPS;
+    address public immutable FEE_SWEEPER;
 
     address public principal;
     address public pendingPrincipal;
@@ -33,8 +50,15 @@ contract CrestVault is ICrestVault {
     mapping(uint256 id => mapping(bytes32 counterparty => bool)) public allowed;
     mapping(bytes32 commitment => Open) internal _opens;
     mapping(address module => address payee) internal _payees;
+    /// Keys whose grant here closed, and previous principals: a signed grant never names one.
+    mapping(address key => bool) internal _retired;
+    uint256 public feeOwed;
 
-    constructor() {
+    /// The factory's fee, fixed in the implementation every clone of it runs.
+    constructor(uint256 feeBps, address feeSweeper) {
+        if (feeBps > 10_000 || (feeBps != 0 && feeSweeper == address(0))) revert InvalidFee();
+        FEE_BPS = feeBps;
+        FEE_SWEEPER = feeSweeper;
         principal = address(1);
     }
 
@@ -83,6 +107,7 @@ contract CrestVault is ICrestVault {
         }
         address previous = principal;
         delete grantOf[previous];
+        _retired[previous] = true;
         (principal, pendingPrincipal) = (proposed, address(0));
         _grants[ROOT].controller = proposed;
         grantOf[proposed] = ROOT;
@@ -99,6 +124,7 @@ contract CrestVault is ICrestVault {
     /// @inheritdoc ICrestVault
     function withdraw(address to, uint256 amount, bytes calldata note) external {
         _requireTopPrincipal();
+        _requireAboveFee(amount);
         emit Withdrawn(to, amount, note);
         SafeTransferLib.safeTransfer(token, to, amount);
     }
@@ -110,25 +136,45 @@ contract CrestVault is ICrestVault {
         external
         returns (uint256 id)
     {
-        Grant storage p = _grants[parentId];
-        if (p.controller == address(0)) revert NoGrant();
-        if (!authorityOver(msg.sender, parentId)) revert NotAuthorized();
-        if (!_isTopPrincipal(msg.sender)) _requireDelegable(parentId);
-        if (p.closed) revert GrantClosed(parentId);
-        if (controller == address(0)) revert ZeroAddress();
-        _requireValid(caps);
-        id = uint256(keccak256(abi.encode(parentId, controller, salt)));
-        uint256 held = grantOf[controller];
-        if (id <= ROOT || _grants[id].controller != address(0) || held == ROOT) revert GrantExists();
-        if (held != 0) {
-            if (!_above(msg.sender, held)) revert GrantExists();
-            _grants[held].closed = true;
-            emit Closed(held, msg.sender, note);
+        return _grant(msg.sender, parentId, controller, caps, salt, note);
+    }
+
+    /// @inheritdoc ICrestVault
+    function grantBySig(SignedGrant calldata signed, bytes calldata signature) external returns (uint256 id) {
+        if (block.timestamp > signed.deadline) revert SignedGrantExpired();
+        if (signature.length != 65 || uint256(bytes32(signature[32:64])) > HALF_N) revert BadGrantSignature();
+        bytes32 structHash = keccak256(
+            abi.encode(
+                SIGNED_GRANT_TYPEHASH,
+                signed.parent,
+                signed.controller,
+                keccak256(abi.encode(CAPS_TYPEHASH, signed.caps)),
+                signed.salt,
+                keccak256(abi.encodePacked(signed.counterparties)),
+                signed.deadline,
+                keccak256(signed.note)
+            )
+        );
+        address signer = ECDSA.tryRecoverCalldata(_hashTypedData(structHash), signature);
+        if (signer == address(0)) revert BadGrantSignature();
+        if (grantOf[signed.controller] != 0 || _retired[signed.controller]) revert KeyNotFresh();
+        id = _grant(signer, signed.parent, signed.controller, signed.caps, signed.salt, signed.note);
+        for (uint256 i; i < signed.counterparties.length; ++i) {
+            allowed[id][signed.counterparties[i]] = true;
+            emit Allowed(id, signed.counterparties[i], true, signer, signed.note);
         }
+    }
+
+    /// @inheritdoc ICrestVault
+    function cancelSignedGrant(uint256 parentId, address controller, bytes32 salt, bytes calldata note) external {
+        _requireExists(parentId);
+        if (!authorityOver(msg.sender, parentId)) revert NotAuthorized();
+        if (controller == address(0)) revert ZeroAddress();
+        uint256 id = uint256(keccak256(abi.encode(parentId, controller, salt)));
         Grant storage g = _grants[id];
-        (g.parent, g.controller, g.caps) = (parentId, controller, caps);
-        grantOf[controller] = id;
-        emit Granted(id, parentId, controller, caps, msg.sender, note);
+        if (id <= ROOT || g.controller != address(0)) revert GrantExists();
+        (g.parent, g.controller, g.closed) = (parentId, controller, true);
+        emit Closed(id, msg.sender, note);
     }
 
     /// @inheritdoc ICrestVault
@@ -159,7 +205,10 @@ contract CrestVault is ICrestVault {
         _requireExists(id);
         if (msg.sender != g.controller && !_above(msg.sender, id)) revert NotAuthorized();
         g.closed = true;
-        if (id != ROOT && grantOf[g.controller] == id) delete grantOf[g.controller];
+        if (id != ROOT && grantOf[g.controller] == id) {
+            delete grantOf[g.controller];
+            _retired[g.controller] = true;
+        }
         emit Closed(id, msg.sender, note);
     }
 
@@ -194,6 +243,7 @@ contract CrestVault is ICrestVault {
         if (id == 0) revert UnknownChild();
         if (!authorityOver(msg.sender, id)) revert NotAuthorized();
         _requireDelegable(id);
+        _requireAboveFee(amount);
         uint128 a = _amount(amount);
         for (uint256 g = id; g != 0; g = _grants[g].parent) {
             _chargeOne(g, a, bytes32(0), false);
@@ -216,6 +266,7 @@ contract CrestVault is ICrestVault {
         address p = parent;
         if (p == address(0)) revert NotChildVault();
         if (msg.sender != p && !authorityOver(msg.sender, ROOT)) revert NotAuthorized();
+        _requireAboveFee(amount);
         emit ReturnedToParent(p, amount, msg.sender, note);
         SafeTransferLib.safeTransfer(token, p, amount);
     }
@@ -237,11 +288,13 @@ contract CrestVault is ICrestVault {
         if (leaf == 0) revert NoGrant();
         if (_opens[commitment].module != address(0)) revert CommitmentOpen();
         uint128 a = _amount(amount);
+        uint128 total = FEE_BPS == 0 ? a : _withFee(leaf, a, nonce);
         for (uint256 g = leaf; g != 0; g = _grants[g].parent) {
-            _chargeOne(g, a, counterparty, true);
+            _chargeOne(g, total, counterparty, true);
         }
         _opens[commitment] = Open({grant: leaf, amount: a, module: msg.sender});
-        if (parent != address(0)) ICrestVault(parent).checkPath(parentGrant, amount, counterparty);
+        if (parent != address(0)) ICrestVault(parent).checkPath(parentGrant, total, counterparty);
+        if (FEE_BPS != 0) _owe(leaf, a, total - a);
         bytes32 digest = keccak256(
             abi.encodePacked(
                 "\x19\x01",
@@ -284,6 +337,15 @@ contract CrestVault is ICrestVault {
         uint256 before = SafeTransferLib.balanceOf(token, address(this));
         AuthCaptureEscrow(escrow).reclaim(paymentInfo);
         emit Reclaimed(module, escrow, SafeTransferLib.balanceOf(token, address(this)) - before);
+    }
+
+    /// @inheritdoc ICrestVault
+    function collectFee() external returns (uint256 owed) {
+        owed = feeOwed;
+        if (owed == 0) return 0;
+        feeOwed = 0;
+        emit FeeCollected(FEE_SWEEPER, owed, msg.sender);
+        if (owed != 0) SafeTransferLib.safeTransfer(token, FEE_SWEEPER, owed);
     }
 
     /// @inheritdoc ICrestVault
@@ -333,6 +395,40 @@ contract CrestVault is ICrestVault {
     }
 
     // Internals
+
+    /// `grant`'s checks and effects, for the caller or, for a signed grant, its signer `by`.
+    function _grant(
+        address by,
+        uint256 parentId,
+        address controller,
+        Caps calldata caps,
+        bytes32 salt,
+        bytes calldata note
+    ) internal returns (uint256 id) {
+        Grant storage p = _grants[parentId];
+        if (p.controller == address(0)) revert NoGrant();
+        if (!authorityOver(by, parentId)) revert NotAuthorized();
+        if (!_isTopPrincipal(by)) _requireDelegable(parentId);
+        if (p.closed) revert GrantClosed(parentId);
+        if (controller == address(0)) revert ZeroAddress();
+        _requireValid(caps);
+        id = uint256(keccak256(abi.encode(parentId, controller, salt)));
+        uint256 held = grantOf[controller];
+        if (id <= ROOT || _grants[id].controller != address(0) || held == ROOT) revert GrantExists();
+        if (held != 0) {
+            if (!_above(by, held)) revert GrantExists();
+            _grants[held].closed = true;
+            emit Closed(held, by, note);
+        }
+        Grant storage g = _grants[id];
+        (g.parent, g.controller, g.caps) = (parentId, controller, caps);
+        grantOf[controller] = id;
+        emit Granted(id, parentId, controller, caps, by, note);
+    }
+
+    function _domainNameAndVersion() internal pure override returns (string memory, string memory) {
+        return ("Crest", "1");
+    }
 
     function _above(address who, uint256 id) internal view returns (bool) {
         if (who == address(0)) return false;
@@ -394,6 +490,48 @@ contract CrestVault is ICrestVault {
         if (parent == address(0)) return;
         if (payment) ICrestVault(parent).checkPath(parentGrant, amount, counterparty);
         else ICrestVault(parent).checkDelegable(parentGrant);
+    }
+
+    /// With a fee, refuses a move that would leave less than the fee owed. At a rate of 0 nothing is ever owed.
+    function _requireAboveFee(uint256 amount) internal view {
+        if (FEE_BPS == 0) return;
+        uint256 owed = feeOwed;
+        if (owed != 0 && SafeTransferLib.balanceOf(token, address(this)) < amount + owed) revert BalanceBelowFee();
+    }
+
+    /// A payment of `a` with its fee, refused by name when the two would not fit in a `uint128`.
+    function _withFee(uint256 leaf, uint128 a, bytes32 nonce) internal returns (uint128) {
+        uint256 total = uint256(a) + uint256(a) * FEE_BPS / 10_000;
+        if (total > type(uint128).max) revert OverPerSpend(leaf);
+        _requireNoPendingApproval(nonce);
+        return uint128(total);
+    }
+
+    /// Adds a payment's fee to what the vault owes, then refuses the payment if the balance would fall below it.
+    function _owe(uint256 leaf, uint128 a, uint128 fee) internal {
+        if (fee != 0) {
+            feeOwed += fee;
+            emit FeeOwed(leaf, fee);
+        }
+        _requireAboveFee(a);
+    }
+
+    /// With a fee, refuses a second approval in one transaction while the token has not yet spent the first, so every
+    /// balance check sees every earlier payment's pull. Then records this approval's nonce.
+    function _requireNoPendingApproval(bytes32 nonce) internal {
+        bytes32 setSlot = PENDING_SET_SLOT;
+        bytes32 nonceSlot = PENDING_NONCE_SLOT;
+        uint256 set;
+        bytes32 last;
+        assembly {
+            set := tload(setSlot)
+            last := tload(nonceSlot)
+        }
+        if (set != 0 && !IERC3009Domain(token).authorizationState(address(this), last)) revert ApprovalPending();
+        assembly {
+            tstore(setSlot, 1)
+            tstore(nonceSlot, nonce)
+        }
     }
 
     function _requireExists(uint256 id) internal view {

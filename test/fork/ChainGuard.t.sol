@@ -54,7 +54,8 @@ contract DeployOnSepoliaTest is ChainGuardBase {
         vm.removeFile(path);
         bytes32 salt = keccak256("crest v01");
         bytes memory moduleCode = abi.encodePacked(type(HoldbackModule).creationCode, abi.encode(RULES));
-        assertEq(address(f), vm.computeCreate2Address(salt, keccak256(type(CrestFactory).creationCode)));
+        bytes memory factoryInit = abi.encodePacked(type(CrestFactory).creationCode, abi.encode(uint256(0), address(0)));
+        assertEq(address(f), vm.computeCreate2Address(salt, keccak256(factoryInit)));
         assertEq(address(m), vm.computeCreate2Address(salt, keccak256(moduleCode)));
     }
 }
