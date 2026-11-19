@@ -17,6 +17,6 @@ Crest knows how to pay; it knows nothing of what it pays for. A module per venue
 ```sh
 git submodule update --init --recursive
 forge test
-CREST_FORK_URL=<sepolia-fork-rpc-url> forge test --match-path 'test/fork/*'   # the deploy rehearsal on a fork of Sepolia
+CREST_FORK_URL=<sepolia-rpc-url> CREST_FORK_BLOCK=<a block behind the head> forge test --match-path 'test/fork/*'   # the deploy rehearsal on a fork of Sepolia
 CREST_CHAIN1_URL=<rpc-url-of-anvil---chain-id-1> forge test --match-contract DeployOnChainOneTest   # the mainnet refusal
 ```

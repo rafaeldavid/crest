@@ -54,7 +54,7 @@ interface ICrestVault {
     ///        day. Must not be 0. A new length keeps the spend of the last window paid in if it overlaps the new one.
     /// @param expiresAt No payment from this instant on (unix seconds); 0 for no expiry.
     /// @param restricted True: a payment must name a counterparty on this grant's own allow list.
-    /// @param mayDelegate False: no one but the top principal grants, creates or fills child vaults at or below it.
+    /// @param mayDelegate False: no one delegates at or below it, except the top vault's principal granting.
     struct Caps {
         uint128 perSpend;
         uint128 perPeriod;
@@ -66,7 +66,9 @@ interface ICrestVault {
         bool mayDelegate;
     }
 
-    /// @notice A grant and its counters. `paused` can be lifted from above; `closed` is permanent.
+    /// @notice A grant and its counters. `paused` can be lifted from above; `closed` is permanent. `inPeriod` counts the
+    ///         window that ends at `windowEnd` (unix seconds) and counts while that end is after the current window's
+    ///         start; a new period length only moves `windowEnd` back to the end of the new current window.
     struct Grant {
         uint256 parent;
         address controller;
@@ -75,7 +77,7 @@ interface ICrestVault {
         Caps caps;
         uint128 inPeriod;
         uint128 spent;
-        uint40 periodIndex;
+        uint40 windowEnd;
         uint32 open;
     }
 

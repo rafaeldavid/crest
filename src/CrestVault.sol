@@ -138,12 +138,8 @@ contract CrestVault is ICrestVault {
         _requireValid(caps);
         Grant storage g = _grants[id];
         Caps memory previous = g.caps;
-        uint256 index = block.timestamp / caps.period;
-        if ((uint256(g.periodIndex) + 1) * previous.period > index * caps.period) {
-            g.periodIndex = uint40(index);
-        } else {
-            (g.periodIndex, g.inPeriod) = (0, 0);
-        }
+        uint256 end = (block.timestamp / caps.period + 1) * caps.period;
+        if (g.windowEnd > end) g.windowEnd = uint40(end);
         g.caps = caps;
         emit CapsSet(id, previous, caps, msg.sender, note);
     }
@@ -366,11 +362,11 @@ contract CrestVault is ICrestVault {
             if (uint256(x.open) + 1 > c.maxOpen) revert TooManyOpen(id);
             x.open += 1;
         }
-        uint40 index = uint40(block.timestamp / c.period);
-        uint256 inPeriod = index == x.periodIndex ? x.inPeriod : 0;
+        uint256 start = block.timestamp / c.period * c.period;
+        uint256 inPeriod = x.windowEnd > start ? x.inPeriod : 0;
         if (inPeriod + amount > c.perPeriod) revert OverPerPeriod(id);
         if (uint256(x.spent) + amount > c.lifetime) revert OverLifetime(id);
-        (x.inPeriod, x.periodIndex) = (uint128(inPeriod + amount), index);
+        (x.inPeriod, x.windowEnd) = (uint128(inPeriod + amount), uint40(start + c.period));
         x.spent += amount;
     }
 
