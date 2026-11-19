@@ -5,25 +5,25 @@ import {CrestVault} from "../src/CrestVault.sol";
 import {ICrestVault} from "../src/ICrestVault.sol";
 import {CrestBase} from "./CrestBase.sol";
 
-/// The factory: anyone creates an owner's vault and gains nothing; addresses are known in advance; code is fixed.
+/// The factory: anyone creates an principal's vault and gains nothing; addresses are known in advance; code is fixed.
 contract CrestFactoryTest is CrestBase {
-    function test_attack_aStrangerCreatesTheOwnersVault_andGetsNoPower() public {
-        address expected = factory.addressOf(owner, address(usdc), bytes32("second"));
+    function test_attack_aStrangerCreatesThePrincipalsVault_andGetsNoPower() public {
+        address expected = factory.addressOf(principal, address(usdc), bytes32("second"));
         vm.prank(stranger);
-        CrestVault v = CrestVault(factory.create(owner, address(usdc), bytes32("second")));
+        CrestVault v = CrestVault(factory.create(principal, address(usdc), bytes32("second")));
         assertEq(address(v), expected, "the address was known before creation");
-        assertEq(v.owner(), owner);
+        assertEq(v.principal(), principal);
         assertEq(v.grantOf(stranger), 0);
         vm.startPrank(stranger);
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        v.setModule(address(module), stranger);
+        v.setModule(address(module), stranger, "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        v.withdraw(stranger, 0);
+        v.withdraw(stranger, 0, "");
         vm.stopPrank();
     }
 
     function test_aSecondCreationReturnsTheVault() public {
-        address again = factory.create(owner, address(usdc), bytes32(0));
+        address again = factory.create(principal, address(usdc), bytes32(0));
         assertEq(again, address(vault));
         assertEq(vault.getGrant(agentGrant).controller, buyer, "nothing was reset");
     }
@@ -36,7 +36,7 @@ contract CrestFactoryTest is CrestBase {
         vault.initialize(stranger, address(usdc), address(0), 0);
     }
 
-    function test_anotherOwnerGetsAnotherAddress() public view {
+    function test_anotherPrincipalGetsAnotherAddress() public view {
         assertTrue(factory.addressOf(stranger, address(usdc), bytes32(0)) != address(vault));
     }
 

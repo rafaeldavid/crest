@@ -18,13 +18,13 @@ contract ChildVaultTest is CrestBase {
     function setUp() public override {
         super.setUp();
         vm.prank(buyer);
-        child = CrestVault(vault.createChild(agentGrant, 0));
+        child = CrestVault(vault.createChild(agentGrant, 0, ""));
         vm.prank(buyer); // the agent owns the child and controls its root
-        subInChild = child.grant(ROOT, sub, _wide(), 0);
+        subInChild = child.grant(ROOT, sub, _wide(), 0, "");
     }
 
     function test_theChildIsTheAgents_underTheAgentsGrant() public view {
-        assertEq(child.owner(), buyer);
+        assertEq(child.principal(), buyer);
         assertEq(child.parent(), address(vault));
         assertEq(child.parentGrant(), agentGrant);
         assertEq(vault.grantOfChild(address(child)), agentGrant);
@@ -34,17 +34,17 @@ contract ChildVaultTest is CrestBase {
 
     function test_fillingTheChild_countsAgainstTheAgentsDay() public {
         vm.prank(buyer);
-        vault.fundChild(address(child), 2 * HOLD);
+        vault.fundChild(address(child), 2 * HOLD, "");
         assertEq(usdc.balanceOf(address(child)), 2 * HOLD);
         assertEq(_grantOf(vault, agentGrant).inPeriod, 2 * HOLD);
         vm.prank(buyer);
         vm.expectRevert(abi.encodeWithSelector(ICrestVault.OverPerPeriod.selector, agentGrant));
-        vault.fundChild(address(child), 2 * HOLD);
+        vault.fundChild(address(child), 2 * HOLD, "");
     }
 
     function test_theSubAgentPaysADealFromTheChild_endsReleased() public {
         vm.prank(buyer);
-        vault.fundChild(address(child), 2 * HOLD);
+        vault.fundChild(address(child), 2 * HOLD, "");
         H.Terms memory t = _vterms(address(child), sub);
         bytes32 id = _fundVia(t, SUB_PK);
         assertEq(usdc.balanceOf(address(child)), HOLD);
@@ -55,7 +55,7 @@ contract ChildVaultTest is CrestBase {
 
     function test_attack_childPaymentOverTheParentsPerDeal_refused() public {
         vm.prank(buyer);
-        vault.fundChild(address(child), 3 * HOLD);
+        vault.fundChild(address(child), 3 * HOLD, "");
         H.Terms memory t = _vterms(address(child), sub);
         t.price = PRICE + 1;
         _expectRefused(t, SUB_PK, abi.encodeWithSelector(ICrestVault.OverPerSpend.selector, agentGrant));
@@ -63,17 +63,17 @@ contract ChildVaultTest is CrestBase {
 
     function test_attack_childPaysAMerchantTheParentDidNotList_refused() public {
         vm.prank(buyer);
-        vault.fundChild(address(child), 2 * HOLD);
+        vault.fundChild(address(child), 2 * HOLD, "");
         H.Terms memory t = _vterms(address(child), sub);
         t.sellerPayoutAddress = vm.addr(OTHER_PK);
         _expectRefused(t, SUB_PK, abi.encodeWithSelector(ICrestVault.CounterpartyNotAllowed.selector, agentGrant));
     }
 
-    function test_attack_childAfterTheOwnerPausesTheAgent_refused() public {
+    function test_attack_childAfterThePrincipalPausesTheAgent_refused() public {
         vm.prank(buyer);
-        vault.fundChild(address(child), 2 * HOLD);
-        vm.prank(owner);
-        vault.setPaused(agentGrant, true);
+        vault.fundChild(address(child), 2 * HOLD, "");
+        vm.prank(principal);
+        vault.setPaused(agentGrant, true, "");
         _expectRefused(
             _vterms(address(child), sub), SUB_PK, abi.encodeWithSelector(ICrestVault.Paused.selector, agentGrant)
         );
@@ -81,60 +81,60 @@ contract ChildVaultTest is CrestBase {
 
     function test_attack_childEnablesItsOwnModuleOrWithdraws_refused() public {
         vm.prank(buyer);
-        vault.fundChild(address(child), HOLD);
+        vault.fundChild(address(child), HOLD, "");
         vm.startPrank(buyer);
         vm.expectRevert(ICrestVault.NotTopVault.selector);
-        child.setModule(address(this), buyer);
+        child.setModule(address(this), buyer, "");
         vm.expectRevert(ICrestVault.NotTopVault.selector);
-        child.withdraw(buyer, HOLD);
+        child.withdraw(buyer, HOLD, "");
         vm.stopPrank();
     }
 
-    function test_moneyGoesBackUpOnly_byTheAgentOrTheOwner() public {
+    function test_moneyGoesBackUpOnly_byTheAgentOrThePrincipal() public {
         vm.prank(buyer);
-        vault.fundChild(address(child), 2 * HOLD);
+        vault.fundChild(address(child), 2 * HOLD, "");
         vm.prank(buyer);
-        child.returnToParent(HOLD);
+        child.returnToParent(HOLD, "");
         assertEq(usdc.balanceOf(address(child)), HOLD);
         uint256 before = usdc.balanceOf(address(vault));
-        vm.prank(owner);
-        vault.takeBackFromChild(address(child), HOLD);
+        vm.prank(principal);
+        vault.takeBackFromChild(address(child), HOLD, "");
         assertEq(usdc.balanceOf(address(child)), 0);
-        assertEq(usdc.balanceOf(address(vault)) - before, HOLD, "the owner took the child's money back");
+        assertEq(usdc.balanceOf(address(vault)) - before, HOLD, "the principal took the child's money back");
     }
 
-    function test_theOwnerReachesTheChildDirectly() public {
+    function test_thePrincipalReachesTheChildDirectly() public {
         vm.prank(buyer);
-        vault.fundChild(address(child), HOLD);
-        vm.prank(owner);
-        child.returnToParent(HOLD);
-        vm.prank(owner);
-        child.setPaused(subInChild, true);
+        vault.fundChild(address(child), HOLD, "");
+        vm.prank(principal);
+        child.returnToParent(HOLD, "");
+        vm.prank(principal);
+        child.setPaused(subInChild, true, "");
         assertTrue(_grantOf(child, subInChild).paused);
     }
 
     function test_attack_strangerFillsOrEmptiesTheChild_refused() public {
         vm.prank(buyer);
-        vault.fundChild(address(child), HOLD);
+        vault.fundChild(address(child), HOLD, "");
         vm.startPrank(stranger);
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.fundChild(address(child), HOLD);
+        vault.fundChild(address(child), HOLD, "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.takeBackFromChild(address(child), HOLD);
+        vault.takeBackFromChild(address(child), HOLD, "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        child.returnToParent(HOLD);
+        child.returnToParent(HOLD, "");
         vm.stopPrank();
     }
 
     function test_attack_theSubAgentEmptiesItsChild_refused() public {
         vm.prank(buyer);
-        vault.fundChild(address(child), HOLD);
+        vault.fundChild(address(child), HOLD, "");
         vm.prank(sub);
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        child.returnToParent(HOLD);
+        child.returnToParent(HOLD, "");
         vm.prank(sub);
         vm.expectRevert(ICrestVault.NotTopVault.selector);
-        child.withdraw(sub, HOLD);
+        child.withdraw(sub, HOLD, "");
     }
 
     function test_attack_aChildMadeOutsideAVault_refused() public {
@@ -144,28 +144,28 @@ contract ChildVaultTest is CrestBase {
     }
 
     function test_attack_anUnknownChild_refused() public {
-        vm.prank(owner);
+        vm.prank(principal);
         vm.expectRevert(ICrestVault.UnknownChild.selector);
-        vault.fundChild(stranger, HOLD);
+        vault.fundChild(stranger, HOLD, "");
     }
 
     function test_attack_aPausedAgentCannotCreateAChild() public {
-        vm.prank(owner);
-        vault.setPaused(agentGrant, true);
+        vm.prank(principal);
+        vault.setPaused(agentGrant, true, "");
         vm.prank(buyer);
         vm.expectRevert(abi.encodeWithSelector(ICrestVault.Paused.selector, agentGrant));
-        vault.createChild(agentGrant, bytes32("second"));
+        vault.createChild(agentGrant, bytes32("second"), "");
     }
 
     function test_aGrandchildIsBoundByTheTop() public {
         vm.prank(buyer);
-        vault.fundChild(address(child), 3 * HOLD);
+        vault.fundChild(address(child), 3 * HOLD, "");
         vm.prank(buyer);
-        CrestVault grandchild = CrestVault(child.createChild(ROOT, 0));
+        CrestVault grandchild = CrestVault(child.createChild(ROOT, 0, ""));
         vm.prank(buyer);
-        child.fundChild(address(grandchild), 2 * HOLD);
+        child.fundChild(address(grandchild), 2 * HOLD, "");
         vm.prank(buyer);
-        grandchild.grant(ROOT, sub2, _wide(), 0);
+        grandchild.grant(ROOT, sub2, _wide(), 0, "");
         H.Terms memory t = _vterms(address(grandchild), sub2);
         t.price = PRICE + 1;
         _expectRefused(t, SUB2_PK, abi.encodeWithSelector(ICrestVault.OverPerSpend.selector, agentGrant));

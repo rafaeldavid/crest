@@ -11,11 +11,11 @@ import {ICrestVault} from "../src/ICrestVault.sol";
 import {HoldbackModule} from "../src/modules/holdback/HoldbackModule.sol";
 
 /// Holdback's own test world (its unchanged rules contract, Commerce Payments' escrow and ERC-3009 collector, and a
-/// token that asks a contract payer through ERC-1271), with a Crest factory, the Holdback module, and one owner's
+/// token that asks a contract payer through ERC-1271), with a Crest factory, the Holdback module, and one principal's
 /// vault in which the deal's buyer key (Holdback's `buyer`) holds an agent grant: one hold per deal, three a day, two
 /// open at once, the test seller's payout address with Holdback's three test adjudicators as its only merchant.
 abstract contract CrestBase is Base {
-    uint256 internal constant OWNER_PK = 0x0A11CE5;
+    uint256 internal constant PRINCIPAL_PK = 0x0A11CE5;
     uint256 internal constant SUB_PK = 0x5AB;
     uint256 internal constant SUB2_PK = 0x5AB2;
     uint256 internal constant HOLD = PRICE + FEE;
@@ -23,7 +23,7 @@ abstract contract CrestBase is Base {
     /// spent on reading it.
     uint256 internal constant ROOT = 1;
 
-    address internal owner;
+    address internal principal;
     address internal sub;
     address internal sub2;
     address internal stranger;
@@ -34,17 +34,17 @@ abstract contract CrestBase is Base {
 
     function setUp() public virtual override {
         super.setUp();
-        owner = vm.addr(OWNER_PK);
+        principal = vm.addr(PRINCIPAL_PK);
         sub = vm.addr(SUB_PK);
         sub2 = vm.addr(SUB2_PK);
         stranger = makeAddr("stranger");
         factory = new CrestFactory();
         module = new HoldbackModule(rules);
-        vault = CrestVault(factory.create(owner, address(usdc), bytes32(0)));
-        vm.startPrank(owner);
-        vault.setModule(address(module), module.payee());
-        agentGrant = vault.grant(ROOT, buyer, _caps(HOLD, 3 * HOLD, type(uint128).max, 2, true, true), 0);
-        vault.allow(agentGrant, _merchant(), true);
+        vault = CrestVault(factory.create(principal, address(usdc), bytes32(0)));
+        vm.startPrank(principal);
+        vault.setModule(address(module), module.payee(), "");
+        agentGrant = vault.grant(ROOT, buyer, _caps(HOLD, 3 * HOLD, type(uint128).max, 2, true, true), 0, "");
+        vault.allow(agentGrant, _merchant(), true, "");
         vm.stopPrank();
         usdc.mint(address(vault), 1_000 * HOLD);
     }
@@ -115,7 +115,7 @@ abstract contract CrestBase is Base {
     }
 
     function _setAgentCaps(ICrestVault.Caps memory c) internal {
-        vm.prank(owner);
-        vault.setCaps(agentGrant, c);
+        vm.prank(principal);
+        vault.setCaps(agentGrant, c, "");
     }
 }

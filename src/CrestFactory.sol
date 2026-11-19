@@ -17,44 +17,44 @@ contract CrestFactory is ICrestFactory {
     }
 
     /// @inheritdoc ICrestFactory
-    function create(address owner, address token, bytes32 salt) external returns (address vault) {
-        bytes32 s = keccak256(abi.encode(owner, token, salt));
+    function create(address principal, address token, bytes32 salt) external returns (address vault) {
+        bytes32 s = keccak256(abi.encode(principal, token, salt));
         vault = LibClone.predictDeterministicAddress(IMPLEMENTATION, s, address(this));
         if (vault.code.length != 0) return vault;
         isVault[vault] = true;
-        emit VaultCreated(vault, owner, token, salt);
+        emit VaultCreated(vault, principal, token, salt);
         vault = LibClone.cloneDeterministic(IMPLEMENTATION, s);
-        CrestVault(vault).initialize(owner, token, address(0), 0);
+        CrestVault(vault).initialize(principal, token, address(0), 0);
     }
 
     /// @inheritdoc ICrestFactory
-    function createChild(address owner, uint256 parentGrant, bytes32 salt) external returns (address child) {
+    function createChild(address principal, uint256 parentGrant, bytes32 salt) external returns (address child) {
         if (!isVault[msg.sender]) revert NotAVault();
-        bytes32 s = keccak256(abi.encode(msg.sender, owner, parentGrant, salt));
+        bytes32 s = keccak256(abi.encode(msg.sender, principal, parentGrant, salt));
         child = LibClone.predictDeterministicAddress(IMPLEMENTATION, s, address(this));
         if (child.code.length != 0) return child;
         address token = CrestVault(msg.sender).token();
         isVault[child] = true;
-        emit ChildVaultCreated(child, msg.sender, owner, parentGrant);
+        emit ChildVaultCreated(child, msg.sender, principal, parentGrant);
         child = LibClone.cloneDeterministic(IMPLEMENTATION, s);
-        CrestVault(child).initialize(owner, token, msg.sender, parentGrant);
+        CrestVault(child).initialize(principal, token, msg.sender, parentGrant);
     }
 
     /// @inheritdoc ICrestFactory
-    function addressOf(address owner, address token, bytes32 salt) external view returns (address) {
+    function addressOf(address principal, address token, bytes32 salt) external view returns (address) {
         return LibClone.predictDeterministicAddress(
-            IMPLEMENTATION, keccak256(abi.encode(owner, token, salt)), address(this)
+            IMPLEMENTATION, keccak256(abi.encode(principal, token, salt)), address(this)
         );
     }
 
     /// @inheritdoc ICrestFactory
-    function childAddressOf(address parent, address owner, uint256 parentGrant, bytes32 salt)
+    function childAddressOf(address parent, address principal, uint256 parentGrant, bytes32 salt)
         external
         view
         returns (address)
     {
         return LibClone.predictDeterministicAddress(
-            IMPLEMENTATION, keccak256(abi.encode(parent, owner, parentGrant, salt)), address(this)
+            IMPLEMENTATION, keccak256(abi.encode(parent, principal, parentGrant, salt)), address(this)
         );
     }
 }

@@ -130,42 +130,37 @@ contract HoldbackModuleTest is CrestBase {
     }
 
     function test_attack_afterPause_refused_andTheAgentCannotResume() public {
-        vm.prank(owner);
-        vault.setPaused(agentGrant, true);
+        vm.prank(principal);
+        vault.setPaused(agentGrant, true, "");
         _expectRefused(
             _vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.Paused.selector, agentGrant)
         );
         vm.prank(buyer);
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.setPaused(agentGrant, false);
-        vm.prank(owner);
-        vault.setPaused(agentGrant, false);
+        vault.setPaused(agentGrant, false, "");
+        vm.prank(principal);
+        vault.setPaused(agentGrant, false, "");
         _fundVia(_vterms(address(vault), buyer), BUYER_PK);
     }
 
-    function test_attack_afterTheOwnerPausesTheRoot_refused() public {
-        vm.prank(owner);
-        vault.setPaused(ROOT, true);
+    function test_attack_afterThePrincipalPausesTheRoot_refused() public {
+        vm.prank(principal);
+        vault.setPaused(ROOT, true, "");
         _expectRefused(
             _vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.Paused.selector, ROOT)
         );
     }
 
-    function test_attack_afterClose_refusedForGood() public {
+    function test_attack_afterClose_refusedForGood_andTheKeyIsFreed() public {
         vm.prank(buyer);
-        vault.close(agentGrant);
-        _expectRefused(
-            _vterms(address(vault), buyer),
-            BUYER_PK,
-            abi.encodeWithSelector(ICrestVault.GrantClosed.selector, agentGrant)
-        );
-        vm.prank(owner);
-        vault.setPaused(agentGrant, false);
-        _expectRefused(
-            _vterms(address(vault), buyer),
-            BUYER_PK,
-            abi.encodeWithSelector(ICrestVault.GrantClosed.selector, agentGrant)
-        );
+        vault.close(agentGrant, "done with this agent");
+        // the closed grant gives its key nothing: the key holds no grant now
+        _expectRefused(_vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.NoGrant.selector));
+        assertEq(vault.grantOf(buyer), 0, "closing frees the key");
+        vm.prank(principal);
+        vault.setPaused(agentGrant, false, "");
+        assertTrue(vault.getGrant(agentGrant).closed, "a close is for good");
+        _expectRefused(_vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.NoGrant.selector));
     }
 
     function test_attack_expiredGrant_refused() public {
@@ -191,8 +186,8 @@ contract HoldbackModuleTest is CrestBase {
         H.Agree memory ag = _agree(t, BUYER_PK);
         vm.expectRevert(ICrestVault.ModuleNotEnabled.selector);
         other.agreeAndFund(t, s, a, ag, H.Funding({signature: new bytes(65)}));
-        vm.prank(owner);
-        vault.setModule(address(module), address(0));
+        vm.prank(principal);
+        vault.setModule(address(module), address(0), "");
         _expectRefused(
             _vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.ModuleNotEnabled.selector)
         );
@@ -246,24 +241,24 @@ contract HoldbackModuleTest is CrestBase {
         bytes32 itself = module.counterpartyOf(buyer, adjudicator, fallbackAdj, appealAdj);
         vm.startPrank(buyer);
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.withdraw(buyer, HOLD);
+        vault.withdraw(buyer, HOLD, "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.setCaps(agentGrant, _wide());
+        vault.setCaps(agentGrant, _wide(), "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.allow(agentGrant, itself, true);
+        vault.allow(agentGrant, itself, true, "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.setModule(address(this), buyer);
+        vault.setModule(address(this), buyer, "");
         vm.stopPrank();
     }
 
     function test_attack_strangerGrantsOrPauses_refused() public {
         vm.startPrank(stranger);
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.grant(agentGrant, stranger, _wide(), 0);
+        vault.grant(agentGrant, stranger, _wide(), 0, "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.setPaused(agentGrant, true);
+        vault.setPaused(agentGrant, true, "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.close(agentGrant);
+        vault.close(agentGrant, "");
         vm.stopPrank();
     }
 
@@ -300,15 +295,15 @@ contract HoldbackModuleTest is CrestBase {
         vault.release(id);
     }
 
-    // Neutrality: nothing the owner does reaches money held for a deal.
+    // Neutrality: nothing the principal does reaches money held for a deal.
 
     function test_neutrality_ownerEmptiesTheVaultAfterFunding_dealStillReleased() public {
         H.Terms memory t = _vterms(address(vault), buyer);
         bytes32 id = _fundVia(t, BUYER_PK);
-        vm.startPrank(owner);
-        vault.setPaused(ROOT, true);
-        vault.setModule(address(module), address(0));
-        vault.withdraw(owner, usdc.balanceOf(address(vault)));
+        vm.startPrank(principal);
+        vault.setPaused(ROOT, true, "");
+        vault.setModule(address(module), address(0), "");
+        vault.withdraw(principal, usdc.balanceOf(address(vault)), "");
         vm.stopPrank();
         assertEq(usdc.balanceOf(address(vault)), 0);
         uint256 sellerBefore = usdc.balanceOf(seller);

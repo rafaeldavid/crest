@@ -12,7 +12,7 @@ interface IERC3009Domain {
 }
 
 /// @title CrestVault
-/// @notice An owner's vault and its tree of grants. `ICrestVault` describes every function, event and error.
+/// @notice A principal's vault and its tree of grants. `ICrestVault` describes every function, event and error.
 contract CrestVault is ICrestVault {
     uint256 public constant ROOT = 1;
     bytes32 internal constant RECEIVE_WITH_AUTHORIZATION_TYPEHASH =
@@ -20,8 +20,8 @@ contract CrestVault is ICrestVault {
     bytes4 internal constant ERC1271_MAGIC = 0x1626ba7e;
     bytes4 internal constant ERC1271_NO = 0xffffffff;
 
-    address public owner;
-    address public pendingOwner;
+    address public principal;
+    address public pendingPrincipal;
     address public token;
     address public factory;
     address public parent;
@@ -35,18 +35,18 @@ contract CrestVault is ICrestVault {
     mapping(address module => address payee) internal _payees;
 
     constructor() {
-        owner = address(1);
+        principal = address(1);
     }
 
     // Setup
 
     /// @inheritdoc ICrestVault
-    function initialize(address owner_, address token_, address parent_, uint256 parentGrant_) external {
-        if (owner != address(0)) revert AlreadyInitialized();
-        if (owner_ == address(0) || token_ == address(0)) revert NotAuthorized();
-        (owner, token, factory, parent, parentGrant) = (owner_, token_, msg.sender, parent_, parentGrant_);
+    function initialize(address principal_, address token_, address parent_, uint256 parentGrant_) external {
+        if (principal != address(0)) revert AlreadyInitialized();
+        if (principal_ == address(0) || token_ == address(0)) revert NotAuthorized();
+        (principal, token, factory, parent, parentGrant) = (principal_, token_, msg.sender, parent_, parentGrant_);
         Grant storage g = _grants[ROOT];
-        g.controller = owner_;
+        g.controller = principal_;
         g.caps = Caps({
             perSpend: type(uint128).max,
             perPeriod: type(uint128).max,
@@ -57,58 +57,63 @@ contract CrestVault is ICrestVault {
             restricted: false,
             mayDelegate: true
         });
-        grantOf[owner_] = ROOT;
-        emit Initialized(owner_, token_, parent_, parentGrant_);
-        emit Granted(ROOT, 0, owner_, g.caps);
+        grantOf[principal_] = ROOT;
+        emit Initialized(principal_, token_, parent_, parentGrant_);
+        emit Granted(ROOT, 0, principal_, g.caps, msg.sender, "");
     }
 
-    // The owner
+    // The principal
 
     /// @inheritdoc ICrestVault
-    function proposeOwner(address proposed) external {
-        _requireTopOwner();
-        pendingOwner = proposed;
-        emit OwnerProposed(owner, proposed);
+    function proposePrincipal(address proposed, bytes calldata note) external {
+        _requireTopPrincipal();
+        pendingPrincipal = proposed;
+        emit PrincipalProposed(principal, proposed, note);
     }
 
     /// @inheritdoc ICrestVault
-    function acceptOwner() external {
+    function acceptPrincipal(bytes calldata note) external {
         if (parent != address(0)) revert NotTopVault();
-        address proposed = pendingOwner;
+        address proposed = pendingPrincipal;
         if (proposed == address(0) || msg.sender != proposed) revert NotAuthorized();
-        if (grantOf[proposed] != 0) revert GrantExists();
-        address previous = owner;
+        uint256 held = grantOf[proposed];
+        if (held != 0) {
+            _grants[held].closed = true;
+            emit Closed(held, proposed, note);
+        }
+        address previous = principal;
         delete grantOf[previous];
-        (owner, pendingOwner) = (proposed, address(0));
+        (principal, pendingPrincipal) = (proposed, address(0));
         _grants[ROOT].controller = proposed;
         grantOf[proposed] = ROOT;
-        emit OwnerChanged(previous, proposed);
+        emit PrincipalChanged(previous, proposed, note);
     }
 
     /// @inheritdoc ICrestVault
-    function setModule(address module, address payee) external {
-        _requireTopOwner();
+    function setModule(address module, address payee, bytes calldata note) external {
+        _requireTopPrincipal();
         _payees[module] = payee;
-        emit ModuleSet(module, payee);
+        emit ModuleSet(module, payee, note);
     }
 
     /// @inheritdoc ICrestVault
-    function withdraw(address to, uint256 amount) external {
-        _requireTopOwner();
+    function withdraw(address to, uint256 amount, bytes calldata note) external {
+        _requireTopPrincipal();
+        emit Withdrawn(to, amount, note);
         SafeTransferLib.safeTransfer(token, to, amount);
-        emit Withdrawn(to, amount);
     }
 
     // The tree
 
     /// @inheritdoc ICrestVault
-    function grant(uint256 parentId, address controller, Caps calldata caps, bytes32 salt)
+    function grant(uint256 parentId, address controller, Caps calldata caps, bytes32 salt, bytes calldata note)
         external
         returns (uint256 id)
     {
         Grant storage p = _grants[parentId];
         if (p.controller == address(0)) revert NoGrant();
         _requireDelegator(parentId, p);
+        if (!_isTopPrincipal(msg.sender)) _requireUsable(parentId);
         if (p.closed) revert GrantClosed(parentId);
         if (controller == address(0)) revert NotAuthorized();
         _requireValid(caps);
@@ -117,63 +122,71 @@ contract CrestVault is ICrestVault {
         Grant storage g = _grants[id];
         (g.parent, g.controller, g.caps) = (parentId, controller, caps);
         grantOf[controller] = id;
-        emit Granted(id, parentId, controller, caps);
+        emit Granted(id, parentId, controller, caps, msg.sender, note);
     }
 
     /// @inheritdoc ICrestVault
-    function setCaps(uint256 id, Caps calldata caps) external {
+    function setCaps(uint256 id, Caps calldata caps, bytes calldata note) external {
         _requireExists(id);
         if (!_above(msg.sender, id)) revert NotAuthorized();
         _requireValid(caps);
-        _grants[id].caps = caps;
-        emit CapsSet(id, caps, msg.sender);
+        Grant storage g = _grants[id];
+        Caps memory previous = g.caps;
+        if (g.periodIndex == uint40(block.timestamp / previous.period)) {
+            g.periodIndex = uint40(block.timestamp / caps.period);
+        } else {
+            (g.periodIndex, g.inPeriod) = (0, 0);
+        }
+        g.caps = caps;
+        emit CapsSet(id, previous, caps, msg.sender, note);
     }
 
     /// @inheritdoc ICrestVault
-    function setPaused(uint256 id, bool paused) external {
+    function setPaused(uint256 id, bool paused, bytes calldata note) external {
         Grant storage g = _grants[id];
         _requireExists(id);
         if (!(paused && msg.sender == g.controller) && !_above(msg.sender, id)) revert NotAuthorized();
         g.paused = paused;
-        emit PausedSet(id, paused, msg.sender);
+        emit PausedSet(id, paused, msg.sender, note);
     }
 
     /// @inheritdoc ICrestVault
-    function close(uint256 id) external {
+    function close(uint256 id, bytes calldata note) external {
         Grant storage g = _grants[id];
         _requireExists(id);
         if (msg.sender != g.controller && !_above(msg.sender, id)) revert NotAuthorized();
         g.closed = true;
-        emit Closed(id, msg.sender);
+        if (id != ROOT && grantOf[g.controller] == id) delete grantOf[g.controller];
+        emit Closed(id, msg.sender, note);
     }
 
     /// @inheritdoc ICrestVault
-    function allow(uint256 id, bytes32 counterparty, bool ok) external {
+    function allow(uint256 id, bytes32 counterparty, bool ok, bytes calldata note) external {
         _requireExists(id);
         if (!_above(msg.sender, id)) revert NotAuthorized();
         allowed[id][counterparty] = ok;
-        emit Allowed(id, counterparty, ok, msg.sender);
+        emit Allowed(id, counterparty, ok, msg.sender, note);
     }
 
     // Child vaults
 
     /// @inheritdoc ICrestVault
-    function createChild(uint256 grantId, bytes32 salt) external returns (address child) {
+    function createChild(uint256 grantId, bytes32 salt, bytes calldata note) external returns (address child) {
         if (grantId == ROOT && parent == address(0)) revert NoChildFromTheRoot();
         Grant storage g = _grants[grantId];
         if (g.controller == address(0)) revert NoGrant();
         _requireDelegator(grantId, g);
         _requireUsable(grantId);
-        address childOwner = g.controller;
-        child = ICrestFactory(factory).childAddressOf(address(this), childOwner, grantId, salt);
+        address childPrincipal = g.controller;
+        child = ICrestFactory(factory).childAddressOf(address(this), childPrincipal, grantId, salt);
         if (grantOfChild[child] != 0) return child;
         grantOfChild[child] = grantId;
-        emit ChildCreated(child, grantId, childOwner);
-        if (ICrestFactory(factory).createChild(childOwner, grantId, salt) != child) revert UnknownChild();
+        emit ChildCreated(child, grantId, childPrincipal, msg.sender, note);
+        if (ICrestFactory(factory).createChild(childPrincipal, grantId, salt) != child) revert UnknownChild();
     }
 
     /// @inheritdoc ICrestVault
-    function fundChild(address child, uint256 amount) external {
+    function fundChild(address child, uint256 amount, bytes calldata note) external {
         uint256 id = grantOfChild[child];
         if (id == 0) revert UnknownChild();
         _requireDelegator(id, _grants[id]);
@@ -182,25 +195,25 @@ contract CrestVault is ICrestVault {
             _chargeOne(g, a, bytes32(0), false);
         }
         if (parent != address(0)) ICrestVault(parent).checkState(parentGrant);
-        emit ChildFunded(child, id, amount, msg.sender);
+        emit ChildFunded(child, id, amount, msg.sender, note);
         SafeTransferLib.safeTransfer(token, child, amount);
     }
 
     /// @inheritdoc ICrestVault
-    function takeBackFromChild(address child, uint256 amount) external {
+    function takeBackFromChild(address child, uint256 amount, bytes calldata note) external {
         uint256 id = grantOfChild[child];
         if (id == 0) revert UnknownChild();
         if (!authorityOver(msg.sender, id)) revert NotAuthorized();
-        emit ChildTakenBack(child, id, amount, msg.sender);
-        ICrestVault(child).returnToParent(amount);
+        emit ChildTakenBack(child, id, amount, msg.sender, note);
+        ICrestVault(child).returnToParent(amount, note);
     }
 
     /// @inheritdoc ICrestVault
-    function returnToParent(uint256 amount) external {
+    function returnToParent(uint256 amount, bytes calldata note) external {
         address p = parent;
         if (p == address(0)) revert NotChildVault();
         if (msg.sender != p && !authorityOver(msg.sender, ROOT)) revert NotAuthorized();
-        emit ReturnedToParent(p, amount, msg.sender);
+        emit ReturnedToParent(p, amount, msg.sender, note);
         SafeTransferLib.safeTransfer(token, p, amount);
     }
 
@@ -327,16 +340,20 @@ contract CrestVault is ICrestVault {
 
     function _above(address who, uint256 id) internal view returns (bool) {
         if (who == address(0)) return false;
-        if (parent == address(0) && who == owner) return true;
+        if (_isTopPrincipal(who)) return true;
         for (uint256 g = _grants[id].parent; g != 0; g = _grants[g].parent) {
-            if (_grants[g].controller == who) return true;
+            if (_grants[g].controller == who && !_grants[g].closed) return true;
         }
         return parent != address(0) && ICrestVault(parent).isAbove(who, parentGrant);
     }
 
-    function _requireTopOwner() internal view {
+    function _isTopPrincipal(address who) internal view returns (bool) {
+        return parent == address(0) && who == principal;
+    }
+
+    function _requireTopPrincipal() internal view {
         if (parent != address(0)) revert NotTopVault();
-        if (msg.sender != owner) revert NotAuthorized();
+        if (msg.sender != principal) revert NotAuthorized();
     }
 
     function _requireDelegator(uint256 id, Grant storage g) internal view {

@@ -13,10 +13,10 @@ import {IHoldbackModule} from "./IHoldbackModule.sol";
 /// @notice Pays a Holdback hold from a Crest vault. `IHoldbackModule` describes every function and error.
 contract HoldbackModule is IHoldbackModule, ICrestEscrowModule {
     HoldbackRules public immutable RULES;
-    AuthCaptureEscrow public immutable ESCROW;
-    address public immutable COLLECTOR;
-    address public immutable TOKEN;
-    uint64 public immutable EXPIRY_MARGIN;
+    AuthCaptureEscrow internal immutable ESCROW;
+    address internal immutable COLLECTOR;
+    address internal immutable TOKEN;
+    uint64 internal immutable EXPIRY_MARGIN;
 
     constructor(HoldbackRules rules) {
         RULES = rules;

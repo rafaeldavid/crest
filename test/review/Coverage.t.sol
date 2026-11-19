@@ -17,7 +17,7 @@ contract ReviewCoverageTest is CrestBase {
     function setUp() public override {
         super.setUp();
         vm.prank(buyer);
-        subGrant = vault.grant(agentGrant, sub, _wide(), 0);
+        subGrant = vault.grant(agentGrant, sub, _wide(), 0, "");
     }
 
     // Each limit at an ancestor (the PR tests per-payment, per-period and the list at an ancestor, not these).
@@ -49,8 +49,8 @@ contract ReviewCoverageTest is CrestBase {
     }
 
     function test_attack_overTheRootsPerPayment_refused() public {
-        vm.prank(owner);
-        vault.setCaps(ROOT, _caps(HOLD - 1, type(uint128).max, type(uint128).max, 10, false, true));
+        vm.prank(principal);
+        vault.setCaps(ROOT, _caps(HOLD - 1, type(uint128).max, type(uint128).max, 10, false, true), "");
         _expectRefused(
             _vterms(address(vault), buyer), BUYER_PK, abi.encodeWithSelector(ICrestVault.OverPerSpend.selector, ROOT)
         );
@@ -60,11 +60,11 @@ contract ReviewCoverageTest is CrestBase {
 
     function test_attack_childPaysAfterTheParentGrantExpires_refused() public {
         vm.prank(buyer);
-        CrestVault child = CrestVault(vault.createChild(agentGrant, 0));
+        CrestVault child = CrestVault(vault.createChild(agentGrant, 0, ""));
         vm.prank(buyer);
-        vault.fundChild(address(child), HOLD);
+        vault.fundChild(address(child), HOLD, "");
         vm.prank(buyer);
-        child.grant(ROOT, sub2, _wide(), 0);
+        child.grant(ROOT, sub2, _wide(), 0, "");
         ICrestVault.Caps memory c = _caps(HOLD, 3 * HOLD, type(uint128).max, 2, true, true);
         c.expiresAt = uint40(block.timestamp + 1);
         _setAgentCaps(c);
@@ -77,8 +77,8 @@ contract ReviewCoverageTest is CrestBase {
     // A payee other than the pinned one.
 
     function test_attack_moduleEnabledWithAnotherPayee_fundingRefused_nothingCounted() public {
-        vm.prank(owner);
-        vault.setModule(address(module), stranger);
+        vm.prank(principal);
+        vault.setModule(address(module), stranger, "");
         H.Terms memory t = _vterms(address(vault), buyer);
         _expectRefused(t, BUYER_PK, bytes("MockERC3009: invalid signature"));
         assertEq(_grantOf(vault, agentGrant).spent, 0);
@@ -103,8 +103,8 @@ contract ReviewCoverageTest is CrestBase {
     bytes32 internal constant NONCE = keccak256("review nonce");
 
     function _chargeAsModule(uint256 amount) internal returns (bytes32 digest) {
-        vm.prank(owner);
-        vault.setModule(address(this), address(this)); // this test is a module whose pinned payee is itself
+        vm.prank(principal);
+        vault.setModule(address(this), address(this), ""); // this test is a module whose pinned payee is itself
         uint256 validBefore = block.timestamp + 1 hours;
         vault.charge(buyer, amount, _merchant(), keccak256("review commitment"), validBefore, NONCE);
         digest = keccak256(
@@ -150,8 +150,8 @@ contract ReviewCoverageTest is CrestBase {
 
     function test_attack_anAmountAbove128Bits_refused() public {
         _setAgentCaps(_wide());
-        vm.prank(owner);
-        vault.setModule(address(this), address(this));
+        vm.prank(principal);
+        vault.setModule(address(this), address(this), "");
         bytes32 merchant = _merchant(); // an external call: made before the expected revert
         vm.expectRevert(ICrestVault.AmountTooLarge.selector);
         vault.charge(buyer, uint256(type(uint128).max) + 1, merchant, keccak256("big"), block.timestamp + 1, NONCE);
@@ -160,35 +160,37 @@ contract ReviewCoverageTest is CrestBase {
     function test_attack_aZeroPeriodThroughSetCaps_refused() public {
         ICrestVault.Caps memory c = _wide();
         c.period = 0;
-        vm.prank(owner);
+        vm.prank(principal);
         vm.expectRevert(ICrestVault.InvalidCaps.selector);
-        vault.setCaps(agentGrant, c);
+        vault.setCaps(agentGrant, c, "");
     }
 
     // A child sends money up only: the PR's test checks the child's balance, not where the money went.
 
     function test_attack_childReturnsToTheCaller_notTheParent_refused() public {
         vm.prank(buyer);
-        CrestVault child = CrestVault(vault.createChild(agentGrant, 0));
+        CrestVault child = CrestVault(vault.createChild(agentGrant, 0, ""));
         vm.prank(buyer);
-        vault.fundChild(address(child), HOLD);
+        vault.fundChild(address(child), HOLD, "");
         uint256 parentBefore = usdc.balanceOf(address(vault));
         uint256 buyerBefore = usdc.balanceOf(buyer);
         vm.prank(buyer);
-        child.returnToParent(HOLD);
+        child.returnToParent(HOLD, "");
         assertEq(usdc.balanceOf(address(vault)) - parentBefore, HOLD, "the money reached the parent");
         assertEq(usdc.balanceOf(buyer), buyerBefore, "the caller got nothing");
     }
 
-    // Ownership: the previous owner loses the root for payments too, not only for withdraw.
+    // Handover: the previous principal loses the root for payments too, not only for withdraw.
 
-    function test_attack_previousOwnerPaysThroughTheRootAfterTheHandover_refused() public {
-        address next = makeAddr("next owner");
-        vm.prank(owner);
-        vault.proposeOwner(next);
+    function test_attack_previousPrincipalPaysThroughTheRootAfterTheHandover_refused() public {
+        address next = makeAddr("next principal");
+        vm.prank(principal);
+        vault.proposePrincipal(next, "");
         vm.prank(next);
-        vault.acceptOwner();
-        _expectRefused(_vterms(address(vault), owner), OWNER_PK, abi.encodeWithSelector(ICrestVault.NoGrant.selector));
+        vault.acceptPrincipal("");
+        _expectRefused(
+            _vterms(address(vault), principal), PRINCIPAL_PK, abi.encodeWithSelector(ICrestVault.NoGrant.selector)
+        );
     }
 
     // The module's nonce and the vault's digest equal what the collector presents, for any representable terms.

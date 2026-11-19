@@ -78,23 +78,24 @@ contract TreeInvariantsTest is Test {
         vm.warp(1_790_000_000);
         token = new MockERC3009Token("Mock USDC", "mUSDC", 6);
         CrestFactory factory = new CrestFactory();
-        address owner = makeAddr("owner");
-        vault = CrestVault(factory.create(owner, address(token), 0));
+        address principal = makeAddr("principal");
+        vault = CrestVault(factory.create(principal, address(token), 0));
         module = new PayModule(address(token));
         h = new TreeHandler(vault, module, token);
-        vm.startPrank(owner);
-        vault.setModule(address(module), address(module));
-        agentGrant = vault.grant(ROOT, h.agent(), _caps(100, 300, 1_000, 3, true, true), 0);
-        vault.allow(agentGrant, h.LISTED(), true);
+        vm.startPrank(principal);
+        vault.setModule(address(module), address(module), "");
+        agentGrant = vault.grant(ROOT, h.agent(), _caps(100, 300, 1_000, 3, true, true), 0, "");
+        vault.allow(agentGrant, h.LISTED(), true, "");
         vm.stopPrank();
         vm.startPrank(h.agent());
         subAGrant = vault.grant(
             agentGrant,
             h.subA(),
             _caps(type(uint128).max, type(uint128).max, type(uint128).max, type(uint32).max, false, false),
-            0
+            0,
+            ""
         );
-        subBGrant = vault.grant(agentGrant, h.subB(), _caps(50, 200, 400, 2, false, false), 0);
+        subBGrant = vault.grant(agentGrant, h.subB(), _caps(50, 200, 400, 2, false, false), 0, "");
         vm.stopPrank();
         token.mint(address(vault), LOADED);
         targetContract(address(h));

@@ -14,7 +14,7 @@ contract HierarchyTest is CrestBase {
         super.setUp();
         _setAgentCaps(_caps(HOLD, 3 * HOLD, type(uint128).max, 10, true, true));
         vm.prank(buyer);
-        subGrant = vault.grant(agentGrant, sub, _wide(), 0);
+        subGrant = vault.grant(agentGrant, sub, _wide(), 0, "");
     }
 
     function test_theAgentGrantsASubAgent_whichFundsInsideTheAgentsLimits() public {
@@ -38,7 +38,7 @@ contract HierarchyTest is CrestBase {
 
     function test_attack_siblingsTogetherPassTheirParent_refused() public {
         vm.prank(buyer);
-        vault.grant(agentGrant, sub2, _wide(), 0);
+        vault.grant(agentGrant, sub2, _wide(), 0, "");
         _fundVia(_vterms(address(vault), sub), SUB_PK);
         _fundVia(_vterms(address(vault), sub), SUB_PK);
         _fundVia(_vterms(address(vault), sub2), SUB2_PK);
@@ -50,8 +50,8 @@ contract HierarchyTest is CrestBase {
     }
 
     function test_attack_pausingTheAgent_stopsItsSubAgents() public {
-        vm.prank(owner);
-        vault.setPaused(agentGrant, true);
+        vm.prank(principal);
+        vault.setPaused(agentGrant, true, "");
         _expectRefused(
             _vterms(address(vault), sub), SUB_PK, abi.encodeWithSelector(ICrestVault.Paused.selector, agentGrant)
         );
@@ -59,15 +59,15 @@ contract HierarchyTest is CrestBase {
 
     function test_theAgentPausesItsSubAgent_andOnlyAuthorityAboveTheSubAgentResumes() public {
         vm.prank(buyer);
-        vault.setPaused(subGrant, true);
+        vault.setPaused(subGrant, true, "");
         _expectRefused(
             _vterms(address(vault), sub), SUB_PK, abi.encodeWithSelector(ICrestVault.Paused.selector, subGrant)
         );
         vm.prank(sub);
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.setPaused(subGrant, false);
+        vault.setPaused(subGrant, false, "");
         vm.prank(buyer);
-        vault.setPaused(subGrant, false);
+        vault.setPaused(subGrant, false, "");
         _fundVia(_vterms(address(vault), sub), SUB_PK);
     }
 
@@ -75,9 +75,9 @@ contract HierarchyTest is CrestBase {
         bytes32 itself = module.counterpartyOf(sub, adjudicator, fallbackAdj, appealAdj);
         vm.startPrank(sub);
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.setCaps(subGrant, _wide());
+        vault.setCaps(subGrant, _wide(), "");
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.allow(agentGrant, itself, true);
+        vault.allow(agentGrant, itself, true, "");
         vm.stopPrank();
     }
 
@@ -85,13 +85,13 @@ contract HierarchyTest is CrestBase {
         _setAgentCaps(_caps(HOLD, 3 * HOLD, type(uint128).max, 10, true, false));
         vm.prank(buyer);
         vm.expectRevert(ICrestVault.MayNotDelegate.selector);
-        vault.grant(agentGrant, sub2, _wide(), 0);
+        vault.grant(agentGrant, sub2, _wide(), 0, "");
     }
 
     function test_attack_oneKeyTwoGrants_refused() public {
-        vm.prank(owner);
+        vm.prank(principal);
         vm.expectRevert(ICrestVault.GrantExists.selector);
-        vault.grant(ROOT, sub, _wide(), bytes32("other"));
+        vault.grant(ROOT, sub, _wide(), bytes32("other"), "");
     }
 
     function test_attack_aZeroPeriod_refused() public {
@@ -99,30 +99,30 @@ contract HierarchyTest is CrestBase {
         c.period = 0;
         vm.prank(buyer);
         vm.expectRevert(ICrestVault.InvalidCaps.selector);
-        vault.grant(agentGrant, sub2, c, 0);
+        vault.grant(agentGrant, sub2, c, 0, "");
     }
 
-    function test_theOwnerPausesAndResumesTheRoot() public {
-        vm.startPrank(owner);
-        vault.setPaused(ROOT, true);
-        vault.setPaused(ROOT, false);
+    function test_thePrincipalPausesAndResumesTheRoot() public {
+        vm.startPrank(principal);
+        vault.setPaused(ROOT, true, "");
+        vault.setPaused(ROOT, false, "");
         vm.stopPrank();
         _fundVia(_vterms(address(vault), sub), SUB_PK);
     }
 
-    function test_ownershipMovesInTwoSteps_andTheOldOwnerLosesTheRoot() public {
-        address next = makeAddr("next owner");
-        vm.prank(owner);
-        vault.proposeOwner(next);
+    function test_thePrincipalRoleMovesInTwoSteps_andTheOldPrincipalLosesTheRoot() public {
+        address next = makeAddr("next principal");
+        vm.prank(principal);
+        vault.proposePrincipal(next, "");
         vm.prank(stranger);
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.acceptOwner();
+        vault.acceptPrincipal("");
         vm.prank(next);
-        vault.acceptOwner();
-        assertEq(vault.owner(), next);
+        vault.acceptPrincipal("");
+        assertEq(vault.principal(), next);
         assertEq(vault.grantOf(next), ROOT);
-        vm.prank(owner);
+        vm.prank(principal);
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
-        vault.withdraw(owner, 1);
+        vault.withdraw(principal, 1, "");
     }
 }

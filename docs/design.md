@@ -1,20 +1,20 @@
 # Crest design record 0001: the vault, its grants, child vaults, the factory and the Holdback module
 
-- **Status:** Accepted, 2026-11-19, for the decisions under "Decided"; the points under "Open" are the owner's.
+- **Status:** Accepted, 2026-11-19, for the decisions under "Decided"; the points under "Open" are the maintainer's.
 - **Origin:** Crow's task T-554 and roadmap row N204. Holdback's side is its ADR-0041 and decision D84: Holdback changes nothing and sees only a payment address that funds a hold.
 - **Labels:** **measured** (run or read as cited), **documented** (a published source says it), **inferred**, **guessed**.
 
 ## Summary
 
-1. **One vault per owner holds the money and a tree of grants.** The owner holds the root. Each agent gets a grant, and an agent allowed to delegate gives its sub-agents grants of their own. Every payment is checked and counted at its grant and at every grant above it, in the transaction that commits the money.
+1. **One vault per principal holds the money and a tree of grants.** The principal holds the root. Each agent gets a grant, and an agent allowed to delegate gives its sub-agents grants of their own. Every payment is checked and counted at its grant and at every grant above it, in the transaction that commits the money.
 2. **A grant's controller can also create a child vault** for a sub-agent: its own address and its own money, filled from the parent within the grant's limits. Its payments still answer to the parent's stops, expiries, per-payment limits and approved merchants, and everything above it can take the money back.
-3. **The vault pays only through modules the owner enabled, each to the one payee the owner pinned for it.** The vault approves exactly one token authorization, the one it builds itself for the payment it has just checked, and only for the rest of that transaction.
+3. **The vault pays only through modules the principal enabled, each to the one payee the principal pinned for it.** The vault approves exactly one token authorization, the one it builds itself for the payment it has just checked, and only for the rest of that transaction.
 4. **The Holdback module is the first venue.** It exposes Holdback's own `agreeAndFund`, reads the deal's terms, has the vault charge the buyer's grant, and forwards the call unchanged. Holdback's contracts are unchanged.
-5. **Nobody who deploys or relays gains any power.** A vault is a fixed minimal clone, its owner is an argument, and the factory keeps no role.
+5. **Nobody who deploys or relays gains any power.** A vault is a fixed minimal clone, its principal is an argument, and the factory keeps no role.
 
 ## Context
 
-### What the owner asked for
+### What the maintainer asked for
 
 From Crow's founder, 2026-11-19, in order:
 - "the owner deploys a contract, funds it, and sets basic controls. The agent can then spend only inside those controls, enforced on chain where the agent cannot override them";
@@ -39,7 +39,7 @@ Three passes ran on 2026-11-19 (kept privately; their findings are summarized he
 
 | Part | What it knows | What it never does |
 | --- | --- | --- |
-| `CrestVault` | the owner, the token, the grants, the limits and counters, the child vaults, the enabled modules and the payee each may pay | read a venue's state or terms |
+| `CrestVault` | the principal, the token, the grants, the limits and counters, the child vaults, the enabled modules and the payee each may pay | read a venue's state or terms |
 | `CrestFactory` | the vault's code | keep any role in a vault it created |
 | `HoldbackModule` | Holdback's terms, its payment record and its deal stages | hold tokens or state |
 
@@ -47,25 +47,27 @@ A second venue is a second module; the vault does not change.
 
 ### 2. The grants
 
-- **A grant** names its parent, its controller (one key), its limits and its state. The owner controls the root. A key controls at most one grant in a vault.
+- **A grant** names its parent, its controller (one key), its limits and its state. The principal controls the root. A key controls at most one grant in a vault.
 - **The limits:** the most one payment may be; the most a period's payments may add up to, with the period's length in seconds (86,400 for a UTC day); the most the grant may ever pay; how many commitments may be open at once; an expiry; whether the controller may grant children or create child vaults. The largest value of each type means no limit of that kind. An allow list, when the grant is restricted, names the counterparties it may pay.
 - **Every payment charges the grant and every grant above it,** checking each one's state, expiry, limits and list, and adding to each one's counters. One refusal reverts the payment, and nothing is counted.
 - **A child granted wider limits than its parent is still bound** by the parent at payment time, so the vault never compares limits when a grant is made.
-- **Who may do what.** The owner withdraws, enables modules, hands the vault over and acts on any grant. A controller above a grant may pause, resume or close it, set its limits and list its counterparties. A grant's own controller may pause or close itself and, when allowed, grant children and create and fill child vaults; it may never widen, resume or reopen its own grant.
-- **A pause has no rank.** Anyone above a paused grant can lift the pause, so an owner who distrusts an agent pauses the agent's own grant, which stops everything below it; the agent cannot lift that.
-- **Keys are first come.** A key holds one grant per vault and grants are never deleted, so an agent that may delegate can take a key the owner meant to use. Owners pick fresh keys for successors and agents.
+- **Who may do what.** The principal withdraws, enables modules, hands the vault over and acts on any grant. A controller above a grant may pause, resume or close it, set its limits and list its counterparties. A grant's own controller may pause or close itself and, when allowed, grant children and create and fill child vaults; it may never widen, resume or reopen its own grant.
+- **A pause has no rank.** Anyone above a paused grant can lift the pause, so an principal who distrusts an agent pauses the agent's own grant, which stops everything below it; the agent cannot lift that.
+- **A key holds one grant per vault, and closing a grant frees its key.** A closed grant's controller has no authority, and delegating needs an open path, so a closed agent cannot act through its sub-agents. A handover closes any grant the new principal's key held, so no agent can block it by giving that key a grant first.
+- **A new period length keeps the current window's spend,** so changing a limit's period never hands the agent a fresh window.
+- **Every change carries who made it and a note.** Each function a principal or a controller calls takes a `note`, and its event carries it with the caller: a reason, a ticket, or the hash of a document kept elsewhere. Limits changes also carry the previous limits. The note is public, so a reason meant to stay private goes in as a hash.
 - **Periods are fixed windows** (`floor(time / period)`), with no carry-over. A refund does not give a period's limit back: the counters are gross, and the refunded money returns to the vault.
 - **Open commitments are counted, not their total.** The total at risk is already bounded by the count times the per-payment limit. The module that opened a commitment releases it when the venue says it has ended; anyone may ask it to.
 
 ### 3. Child vaults
 
-- **Created through the parent:** the controller of a grant that may delegate asks its vault to create a child vault. The child's owner is that controller; its parent is the vault, and its parent grant is that grant.
+- **Created through the parent:** the controller of a grant that may delegate asks its vault to create a child vault. The child's principal is that controller; its parent is the vault, and its parent grant is that grant.
 - **Filled through the parent:** the parent's controller moves money into the child. The move is charged to the grant's path for its period and total limits, like a payment; it opens no commitment.
 - **Bound from above:** each payment from a child is checked against the parent grant's path for its state, expiry, per-payment limit and approved counterparties, through the whole chain of parents. A stop anywhere above stops the child at once.
-- **Modules come from the top:** a child pays only through modules enabled at the top vault, to the payees pinned there. A child's owner cannot enable a module.
-- **Money goes back up only:** a child sends money to its parent vault and nowhere else. Its owner, and anyone with authority over the parent grant, can send it back.
+- **Modules come from the top:** a child pays only through modules enabled at the top vault, to the payees pinned there. A child's principal cannot enable a module.
+- **Money goes back up only:** a child sends money to its parent vault and nowhere else. Its principal, and anyone with authority over the parent grant, can send it back.
 - **The child's root extends the parent grant:** only authority strictly above the parent grant can widen, resume or reopen it; the grant's controller manages everything below it. Filling a child needs the parent grant's right to delegate and an unpaused path above it.
-- **No handover strands a child:** a child vault cannot be handed over, and a top vault's root creates no child, so a change of owner never leaves a child with the previous one.
+- **No handover strands a child:** a child vault cannot be handed over, and a top vault's root creates no child, so a change of principal never leaves a child with the previous one.
 
 ### 4. Payments
 
@@ -76,40 +78,40 @@ A second venue is a second module; the vault does not change.
 ### 5. The Holdback module
 
 - **The buyer is the agent's key; the payer is the vault.** The terms name the agent's key as `buyer` and the vault as `buyerPaymentAddress`. The rules contract checks the agent's own agreement; the vault's grant for that key bounds what it may fund.
-- **The counterparty** is the deal's payout address together with its three adjudicators, so an owner approves a merchant and the adjudicators it accepts in one entry. A hold pays out only to the terms' payout address or back to the payer (Holdback, `HoldbackRules.sol:400`) [measured], so the approved-merchant list holds through the escrow.
+- **The counterparty** is the deal's payout address together with its three adjudicators, so an principal approves a merchant and the adjudicators it accepts in one entry. A hold pays out only to the terms' payout address or back to the payer (Holdback, `HoldbackRules.sol:400`) [measured], so the approved-merchant list holds through the escrow.
 - **The amount** is the hold: price plus the adjudication fee. Operator fees are not paid through the module; the pilots' fee is 0.
 - **Open deals end** when the rules contract's stage is Released, Refunded or Settled, or the escrow's expiry has passed.
-- **One module per Holdback rules deployment.** After a redeploy the owner enables the new module with one transaction.
+- **One module per Holdback rules deployment.** After a redeploy the principal enables the new module with one transaction.
 
 ### 6. The factory
 
-- **Each vault is a minimal clone** of one implementation, at an address that follows from the owner, the token and a salt. Anyone may create it and pay the gas; the creator gets nothing. A second creation returns the existing vault.
+- **Each vault is a minimal clone** of one implementation, at an address that follows from the principal, the token and a salt. Anyone may create it and pay the gas; the creator gets nothing. A second creation returns the existing vault.
 - **The implementation and the factory** deploy once per chain.
 
 ### 7. Neutrality and the hold
 
-No owner, controller, module or factory can stop a funded deal from settling by its terms or move a hold. Before funding, a limit or a stop only declines to pay, as any buyer may. After funding, the owner can stop its agent and take back everything not in a hold, and Holdback's own timeouts return every hold. A Crest vault is the owner's own wallet, not a settlement contract: its owner has over it what any key has over its own balance.
+No principal, controller, module or factory can stop a funded deal from settling by its terms or move a hold. Before funding, a limit or a stop only declines to pay, as any buyer may. After funding, the principal can stop its agent and take back everything not in a hold, and Holdback's own timeouts return every hold. A Crest vault is the principal's own wallet, not a settlement contract: its principal has over it what any key has over its own balance.
 
 ### 8. Measured on the first build
 
-- `forge test` on Holdback's own test world and its unchanged rules contract: an attack test for each control in section 9, refused by name; five invariants over random payments through a tree (no grant passes its total, period or open limit; every level counts what passes through it; money leaves only to the pinned payee); a fuzz test that the approved digest equals the collector's for any terms; and a selector allowlist [measured, 2026-11-19]. One review and one red-team pass found three child-vault authority gaps and missing attack tests; each is fixed and covered by a test.
+- `forge test` on Holdback's own test world and its unchanged rules contract: an attack test for each control in section 9, refused by name; five invariants over random payments through a tree (no grant passes its total, period or open limit; every level counts what passes through it; money leaves only to the pinned payee); a fuzz test that the approved digest equals the collector's for any terms; and a selector allowlist [measured, 2026-11-19]. One review and one red-team pass found three child-vault authority gaps, a handover an agent could block, a period change that opened a fresh window, and missing attack tests; each is fixed and covered by a test. The red team's 29 attacks, the review's 24 tests and the build's own tests pass together: 124 of 124 [measured, 2026-11-19].
 - Static analysis: Slither and Aderyn report no finding of High impact that holds on reading; their ordering and unused-return findings are fixed [measured].
 - On a local chain with Holdback's operator code, a funding sent from a Crest vault through the Holdback module was followed with no change to the operators, and the deal ended Released; a funding over the per-deal limit reverted [measured, 2026-11-19, at this repository's commit `e532074`].
 - A funding through a vault one level below the root costs 390,634 gas, against 297,568 from a plain key, measured in the same forge test [measured].
 
 ### 9. What the tests must show failing
 
-For each control, an attempt to break it that fails: a payment over each limit at the grant and at each ancestor; a wider child; siblings that together pass their parent; an unlisted counterparty at any level; after a stop at any level; an expired grant; a controller widening or resuming itself; a stranger or an agent withdrawing, enabling a module or granting; a module not enabled; a payee other than the pinned one; a commitment opened or released twice; a failed venue call after a charge (nothing counted); the approval used twice or asked by a caller that is not the token; the period boundary; a child vault paying past its parent's stop, expiry, per-payment limit or list; a child sending money anywhere but up; a Holdback funding sent straight to the rules contract for a vault-paid deal; and the owner emptying the vault after a funding while the deal still settles.
+For each control, an attempt to break it that fails: a payment over each limit at the grant and at each ancestor; a wider child; siblings that together pass their parent; an unlisted counterparty at any level; after a stop at any level; an expired grant; a controller widening or resuming itself; a stranger or an agent withdrawing, enabling a module or granting; a module not enabled; a payee other than the pinned one; a commitment opened or released twice; a failed venue call after a charge (nothing counted); the approval used twice or asked by a caller that is not the token; the period boundary; a child vault paying past its parent's stop, expiry, per-payment limit or list; a child sending money anywhere but up; a Holdback funding sent straight to the rules contract for a vault-paid deal; and the principal emptying the vault after a funding while the deal still settles.
 
-## Open, for the owner
+## Open, for the maintainer
 
-1. **The vault as the buyer,** so the owner can step in on a funded deal: it needs Holdback's operators to read a contract buyer (Holdback T-227) and narrows Holdback's ADR-0038 rule that a revocation never touches a funded deal.
+1. **The vault as the buyer,** so the principal can step in on a funded deal: it needs Holdback's operators to read a contract buyer (Holdback T-227) and narrows Holdback's ADR-0038 rule that a revocation never touches a funded deal.
 2. **Gas:** the operators relaying a vault's funding, so agents need no ETH, and Crow paying to create vaults on request (a new request field or route).
 3. **The fee:** none now is recommended, with no fee code in any contract.
 4. **Grants by signature alone,** so a sub-agent costs no transaction.
 5. **A second approver above a threshold,** carried in the funding's signature field.
 6. **Depending on third-party code a single address can pause, or under copyleft or source-available licences:** none in the first version.
 7. **A trademark search for the name** before any public use.
-8. **Deploys to Sepolia,** on the owner's word.
+8. **Deploys to Sepolia,** on the maintainer's word.
 
 The repository's visibility is settled: public since 2026-11-19, with secret scanning, push protection, private vulnerability reporting, and a rule on `main` that takes changes only by pull request with both checks passing.
