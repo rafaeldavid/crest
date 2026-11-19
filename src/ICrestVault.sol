@@ -10,13 +10,13 @@ import {AuthCaptureEscrow} from "commerce-payments/AuthCaptureEscrow.sol";
 ///
 ///         The tree. The principal controls the root grant. Each grant names a parent, one controller key and its
 ///         limits. A payment charges the grant of the key that asks and every grant above it: each checks its state,
-///         its expiry, its limits and its allow list, and adds to its own counters. One refusal reverts the whole
+///         its expiry, its limits and the merchant list it names, and adds to its own counters. One refusal reverts the whole
 ///         payment and nothing is counted. A child granted wider limits than its parent is still bound by the parent at
 ///         payment time, so limits are never compared when a grant is made.
 ///
 ///         Who may do what. A top vault's principal withdraws, enables modules, hands the vault over and acts on any
-///         grant. A controller above a grant, at any level, may pause, resume, close or set the limits of that grant
-///         and list its counterparties; a closed grant's controller loses that authority, though in a child vault it
+///         grant. A controller above a grant, at any level, may pause, resume, close or set the limits and the list of
+///         that grant; a closed grant's controller loses that authority, though in a child vault it
 ///         made it still manages grants that cannot pay. A grant's own controller may pause or close itself and, while
 ///         every grant on its path is open and may delegate, grant children and create and fill child vaults. It never
 ///         widens, resumes or reopens its own grant. Anyone above a paused grant can lift the pause, so pause or close
@@ -26,7 +26,7 @@ import {AuthCaptureEscrow} from "commerce-payments/AuthCaptureEscrow.sol";
 ///         and fill it from this vault within the grant's period and total limits. The child's root extends that grant:
 ///         only authority strictly above the grant can widen, resume or reopen it. Every payment from the child is also
 ///         checked against the parent grant's path, and the paths above it in every ancestor vault, for state, expiry,
-///         per-payment limit and allow lists. A child pays only through modules enabled at the top vault, to the payees
+///         per-payment limit and lists. A child pays only through modules enabled at the top vault, to the payees
 ///         pinned there, and sends money only back to its parent. A child cannot be handed over, and a top vault's root
 ///         creates no child, so a handover never leaves a child with the previous principal.
 ///
@@ -66,8 +66,9 @@ interface ICrestVault {
     /// @param period A period's length in seconds; a period is `floor(block.timestamp / period)`, so 86,400 is a UTC
     ///        day. Must not be 0. A new length keeps the spend of the last window paid in if it overlaps the new one.
     /// @param expiresAt No payment from this instant on (unix seconds); 0 for no expiry.
-    /// @param restricted True: a payment must name a counterparty on this grant's own allow list.
     /// @param mayDelegate False: no one delegates at or below it, except the top vault's principal granting.
+    /// @param list The contract that says whom this grant may pay (`ICrestList`), asked at every payment; 0 for anyone,
+    ///        bounded still by every list above. Whoever controls the list controls whom the grant can pay.
     struct Caps {
         uint128 perSpend;
         uint128 perPeriod;
@@ -75,8 +76,8 @@ interface ICrestVault {
         uint32 maxOpen;
         uint32 period;
         uint40 expiresAt;
-        bool restricted;
         bool mayDelegate;
+        address list;
     }
 
     /// @notice A grant and its counters. `paused` can be lifted from above; `closed` is permanent. `inPeriod` counts the
@@ -94,14 +95,12 @@ interface ICrestVault {
         uint32 open;
     }
 
-    /// @notice A grant signed off chain: `grant`'s arguments, the counterparties its allow list starts with, and the last
-    ///         instant (unix seconds) it may be submitted.
+    /// @notice A grant signed off chain: `grant`'s arguments and the last instant (unix seconds) it may be submitted.
     struct SignedGrant {
         uint256 parent;
         address controller;
         Caps caps;
         bytes32 salt;
-        bytes32[] counterparties;
         uint40 deadline;
         bytes note;
     }
@@ -127,7 +126,6 @@ interface ICrestVault {
     event CapsSet(uint256 indexed id, Caps previous, Caps caps, address indexed by, bytes note);
     event PausedSet(uint256 indexed id, bool paused, address indexed by, bytes note);
     event Closed(uint256 indexed id, address indexed by, bytes note);
-    event Allowed(uint256 indexed id, bytes32 indexed counterparty, bool allowed, address indexed by, bytes note);
     event Charged(
         uint256 indexed grant, bytes32 indexed commitment, address indexed module, uint256 amount, bytes32 counterparty
     );
@@ -206,10 +204,10 @@ interface ICrestVault {
         external
         returns (uint256 id);
 
-    /// @notice Lands `signed` as `grant` would for its signer, and lists its counterparties, by anyone until its
-    ///         deadline, for a fresh key: one that has never held a grant here, nor been this vault's principal. A key
-    ///         that held one is granted again, or moved, by transaction. `signature` is a 65-byte ECDSA signature with
-    ///         a low `s`: a contract controller grants by transaction.
+    /// @notice Lands `signed` as `grant` would for its signer, by anyone until its deadline, for a fresh key: one that
+    ///         has never held a grant here, nor been this vault's principal. A key that held one is granted again, or
+    ///         moved, by transaction. `signature` is a 65-byte ECDSA signature with a low `s`: a contract controller
+    ///         grants by transaction.
     /// @return id The new grant's ID.
     function grantBySig(SignedGrant calldata signed, bytes calldata signature) external returns (uint256 id);
 
@@ -227,9 +225,6 @@ interface ICrestVault {
 
     /// @notice Closes grant `id` for good and frees its key. By its own controller or by authority above it.
     function close(uint256 id, bytes calldata note) external;
-
-    /// @notice Lists or unlists `counterparty` on grant `id`. By anyone with authority above it.
-    function allow(uint256 id, bytes32 counterparty, bool allowed, bytes calldata note) external;
 
     // Child vaults
 
@@ -313,9 +308,15 @@ interface ICrestVault {
     function parentGrant() external view returns (uint256);
     function grantOf(address controller) external view returns (uint256);
     function grantOfChild(address child) external view returns (uint256);
-    function allowed(uint256 id, bytes32 counterparty) external view returns (bool);
     function getGrant(uint256 id) external view returns (Grant memory);
     function getOpen(bytes32 commitment) external view returns (Open memory);
+}
+
+/// @notice The merchant list a grant names. The vault asks it read-only, under a fixed gas cap, at every payment.
+interface ICrestList {
+    /// @notice Whether `vault`'s grant `grant` may pay `counterparty`. Only this function's selector is a yes; a
+    ///         revert, running out of gas or any other answer is a no.
+    function allows(address vault, uint256 grant, bytes32 counterparty) external view returns (bytes4);
 }
 
 /// @notice A module that pays through a Commerce Payments escrow names it, so the vault can call that escrow's

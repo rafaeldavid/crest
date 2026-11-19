@@ -48,7 +48,7 @@ A second venue is a second module; the vault does not change.
 ### 2. The grants
 
 - **A grant** names its parent, its controller (one key), its limits and its state. The principal controls the root. A key controls at most one grant in a vault.
-- **The limits:** the most one payment may be; the most a period's payments may add up to, with the period's length in seconds (86,400 for a UTC day); the most the grant may ever pay; how many commitments may be open at once; an expiry; whether the controller may grant children or create child vaults. The largest value of each type means no limit of that kind. An allow list, when the grant is restricted, names the counterparties it may pay.
+- **The limits:** the most one payment may be; the most a period's payments may add up to, with the period's length in seconds (86,400 for a UTC day); the most the grant may ever pay; how many commitments may be open at once; an expiry; whether the controller may grant children or create child vaults. The largest value of each type means no limit of that kind. A merchant list contract, when the grant names one, says which counterparties it may pay (section 15).
 - **Every payment charges the grant and every grant above it,** checking each one's state, expiry, limits and list, and adding to each one's counters. One refusal reverts the payment, and nothing is counted.
 - **A child granted wider limits than its parent is still bound** by the parent at payment time, so the vault never compares limits when a grant is made.
 - **Who may do what.** The principal withdraws, enables modules, hands the vault over and acts on any grant. A controller above a grant may pause, resume or close it, set its limits and list its counterparties. A grant's own controller may pause or close itself and, when allowed, grant children and create and fill child vaults; it may never widen, resume or reopen its own grant.
@@ -306,7 +306,7 @@ It changes the third: the fixed recipient is a sweeper contract that collects. W
 
 Every fee line is in the outside review's scope: the maintainer set it to all six contract files, in deep mode, and the sweeper and its interface add two files.
 
-### 15. Approved merchants in a list contract the principal chooses (decided; the design below is proposed, for the maintainer; not built)
+### 15. Approved merchants in a list contract the principal chooses (decided 2026-11-19; built)
 
 The maintainer, on approving merchants by an agent-identity registry: "later, crest code should allow for an approved address list defined in another contract, not integrated into the vault code itselt, the vault owner should be able to set where that check goes".
 
@@ -347,7 +347,24 @@ Attack tests that must fail:
 
 Gas: the pull request reports a payment's cost with the external check against today's in-vault check, at one level and at three.
 
-Scope: the default list contract and its interface are new files, so the outside review's file list grows by two when this is built.
+**Decided and built.** The maintainer accepted this design with the fee ("looks good to me"). What was built:
+- **The list field.** `Caps.list` replaces `Caps.restricted`, and `Caps` now ends with `mayDelegate` and then `list`, so a grant with no list writes no extra storage. Only authority above a grant sets it, through `grant`, `setCaps` or a signed grant, with the change's note.
+- **No list means anyone.** A grant whose list is 0 may pay anyone, bounded still by every list above it.
+- **How the vault asks.**
+  - Every level of a payment's path that names a list is asked, here and in every ancestor vault. The call is `allows(vault, grant, counterparty)`, made with `staticcall` and at most 30,000 gas (`LIST_GAS`).
+  - Only the exact selector counts as a yes. A revert, running out of gas, a list with no code, `true`, garbage, a long answer, an attempt to write, or a re-entry is a no, and the payment is refused with `CounterpartyNotAllowed`.
+  - A list is read only at payment, so it cannot touch a funded deal, stop a withdrawal, or stop the principal from pointing the grant elsewhere.
+- **The default list.** `CrestAllowList` is one contract with no owner. It stores `(vault, grant, counterparty) → bool` and emits `Allowed(vault, grant, counterparty, ok, by, note)`.
+  - A write passes when the vault says the sender is above the grant, as the vault's own `allow` did.
+  - A contract that only claims to be a vault writes only its own entries.
+  - The vault drops `allowed` and `allow`. Its `Allowed` event now lives in the default list, with the vault added, so the record of who listed whom and why is kept.
+- **A signed grant names a list, not entries.** `SignedGrant` drops `counterparties`, because the vault no longer holds entries to write. A slip with no list is still bounded by every list above it. To give a sub-agent a narrower list than its parent's, the slip points at a list its signer keeps.
+- **Measured (2026-11-19), each call from cold storage.**
+  - A list's answer costs 12,071 gas for the default list and 17,843 for a list that makes one call to a registry and two reads there, as an identity-based list would. The cap of 30,000 leaves room for the second.
+  - A funding through the module costs 429,148 execution gas with the old in-vault list. Through the default list it costs 437,127 (7,979 more), and through the registry-reading list 442,830.
+  - The six contract files go from 1,099 to 1,098 lines (`CrestVault.sol` 512, `ICrestVault.sol` 326). `CrestAllowList.sol` (23) and `ICrestAllowList.sol` (21) are new, so with the sweeper's two files the ten hold 1,191.
+
+Scope: the default list and its interface are two more files for the outside review.
 
 ### 16. Three more answers (decided, 2026-11-19)
 
@@ -420,7 +437,7 @@ The maintainer: "Does this require code change for crest? Feels like something q
 **Decided and built.** The maintainer, after the design and a question about a leaked signature: "Ok that looks good then implement". Shape (a) only. The fee and the external list still wait for his word.
 
 What was built (`grantBySig`, `cancelSignedGrant`, `SignedGrant`):
-- **What is signed.** `SignedGrant(parent, controller, caps, salt, counterparties, deadline, note)`, under the vault's EIP-712 domain: name "Crest", version "1", the chain ID and the vault's address. So every limit, the starting allow list, the note and the deadline are signed, and so are the vault and the chain.
+- **What is signed.** `SignedGrant(parent, controller, caps, salt, deadline, note)`, under the vault's EIP-712 domain: name "Crest", version "1", the chain ID and the vault's address. So every limit, the list the grant names, the note and the deadline are signed, and so are the vault and the chain.
 - **Who may sign.** Exactly who may call `grant` for that parent. The vault recovers the signer and runs `grant`'s checks with it in the caller's place, at submission. A slip from a key without authority, from a closed grant's key, or from a path that is paused, expired or may not delegate is refused. A slip that landed before a stop gives an ordinary grant, which the stop reaches at every payment, as it reaches any grant.
 - **It is not a bearer instrument.** The slip names the key it grants. Whoever submits it gains nothing, and only that key can sign the deals the grant pays. A slip that leaks before use lets its holder do only what the signer already chose: land that grant for that key, once.
 - **Replay.** The grant's ID, `keccak256(parent, controller, salt)`, is taken once and stays taken, even after the grant closes, so a second submission is refused.
@@ -444,7 +461,7 @@ What was built (`grantBySig`, `cancelSignedGrant`, `SignedGrant`):
 ## Open, for the maintainer
 
 1. **The fee** (section 14): decided and built. The sweeper's destination is decided when a fee is switched on.
-2. **The external merchant list's design** (section 15): one list contract per grant, set with the limits, asked read-only and gas-capped at every level. To accept or change before it is built.
+2. **The external merchant list** (section 15): decided and built.
 3. **Grants by signature** (section 17): decided and built, shape (a).
 4. **Holdback's side of the vault as the buyer** (section 12):
     - **The schema change is decided (2026-11-19).** Holdback's schema v0.12 carries a contract buyer's longer signature, and its operators read a contract buyer, built by the standing-offers sessions in Holdback.

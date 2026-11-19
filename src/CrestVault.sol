@@ -7,7 +7,7 @@ import {EIP712} from "solady/utils/EIP712.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 
 import {ICrestFactory} from "./ICrestFactory.sol";
-import {ICrestEscrowModule, ICrestVault} from "./ICrestVault.sol";
+import {ICrestEscrowModule, ICrestList, ICrestVault} from "./ICrestVault.sol";
 
 interface IERC3009Domain {
     function DOMAIN_SEPARATOR() external view returns (bytes32);
@@ -20,11 +20,13 @@ contract CrestVault is ICrestVault, EIP712 {
     bytes32 internal constant RECEIVE_WITH_AUTHORIZATION_TYPEHASH =
         0xd099cc98ef71107a616c4f0f941f04c322d8e254fe26b3c6668db87aae413de8;
     bytes32 internal constant CAPS_TYPEHASH = keccak256(
-        "Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool restricted,bool mayDelegate)"
+        "Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool mayDelegate,address list)"
     );
     bytes32 internal constant SIGNED_GRANT_TYPEHASH = keccak256(
-        "SignedGrant(uint256 parent,address controller,Caps caps,bytes32 salt,bytes32[] counterparties,uint40 deadline,bytes note)Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool restricted,bool mayDelegate)"
+        "SignedGrant(uint256 parent,address controller,Caps caps,bytes32 salt,uint40 deadline,bytes note)Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool mayDelegate,address list)"
     );
+    /// The gas a grant's merchant list may use to answer, measured against the default list and a registry-reading one.
+    uint256 internal constant LIST_GAS = 30_000;
     /// The largest `s` of a non-malleable secp256k1 signature, `n / 2`.
     uint256 internal constant HALF_N = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
     bytes4 internal constant ERC1271_MAGIC = 0x1626ba7e;
@@ -43,7 +45,6 @@ contract CrestVault is ICrestVault, EIP712 {
     mapping(uint256 id => Grant) internal _grants;
     mapping(address controller => uint256 id) public grantOf;
     mapping(address child => uint256 id) public grantOfChild;
-    mapping(uint256 id => mapping(bytes32 counterparty => bool)) public allowed;
     mapping(bytes32 commitment => Open) internal _opens;
     mapping(address module => address payee) internal _payees;
     /// Keys whose grant here closed, and previous principals: a signed grant never names one.
@@ -74,8 +75,8 @@ contract CrestVault is ICrestVault, EIP712 {
             maxOpen: type(uint32).max,
             period: 1 days,
             expiresAt: 0,
-            restricted: false,
-            mayDelegate: true
+            mayDelegate: true,
+            list: address(0)
         });
         grantOf[principal_] = ROOT;
         emit Initialized(principal_, token_, parent_, parentGrant_);
@@ -146,7 +147,6 @@ contract CrestVault is ICrestVault, EIP712 {
                 signed.controller,
                 keccak256(abi.encode(CAPS_TYPEHASH, signed.caps)),
                 signed.salt,
-                keccak256(abi.encodePacked(signed.counterparties)),
                 signed.deadline,
                 keccak256(signed.note)
             )
@@ -155,10 +155,6 @@ contract CrestVault is ICrestVault, EIP712 {
         if (signer == address(0)) revert BadGrantSignature();
         if (grantOf[signed.controller] != 0 || _retired[signed.controller]) revert KeyNotFresh();
         id = _grant(signer, signed.parent, signed.controller, signed.caps, signed.salt, signed.note);
-        for (uint256 i; i < signed.counterparties.length; ++i) {
-            allowed[id][signed.counterparties[i]] = true;
-            emit Allowed(id, signed.counterparties[i], true, signer, signed.note);
-        }
     }
 
     /// @inheritdoc ICrestVault
@@ -206,14 +202,6 @@ contract CrestVault is ICrestVault, EIP712 {
             _retired[g.controller] = true;
         }
         emit Closed(id, msg.sender, note);
-    }
-
-    /// @inheritdoc ICrestVault
-    function allow(uint256 id, bytes32 counterparty, bool ok, bytes calldata note) external {
-        _requireExists(id);
-        if (!_above(msg.sender, id)) revert NotAuthorized();
-        allowed[id][counterparty] = ok;
-        emit Allowed(id, counterparty, ok, msg.sender, note);
     }
 
     // Child vaults
@@ -454,7 +442,7 @@ contract CrestVault is ICrestVault, EIP712 {
         _requireState(id, x, c);
         if (payment) {
             if (amount > c.perSpend) revert OverPerSpend(id);
-            if (c.restricted && !allowed[id][counterparty]) revert CounterpartyNotAllowed(id);
+            if (c.list != address(0) && !_listAllows(c.list, id, counterparty)) revert CounterpartyNotAllowed(id);
             if (uint256(x.open) + 1 > c.maxOpen) revert TooManyOpen(id);
             x.open += 1;
         }
@@ -485,7 +473,9 @@ contract CrestVault is ICrestVault, EIP712 {
             _requireState(g, x, c);
             if (!payment && !c.mayDelegate) revert MayNotDelegate();
             if (payment && amount > c.perSpend) revert OverPerSpend(g);
-            if (payment && c.restricted && !allowed[g][counterparty]) revert CounterpartyNotAllowed(g);
+            if (payment && c.list != address(0) && !_listAllows(c.list, g, counterparty)) {
+                revert CounterpartyNotAllowed(g);
+            }
         }
         if (parent == address(0)) return;
         if (payment) ICrestVault(parent).checkPath(parentGrant, amount, counterparty);
@@ -497,6 +487,14 @@ contract CrestVault is ICrestVault, EIP712 {
         if (FEE_BPS != 0 && SafeTransferLib.balanceOf(token, address(this)) < amount + feeOwed) {
             revert BalanceBelowFee();
         }
+    }
+
+    /// Asks `list`, read-only and with at most `LIST_GAS`, whether grant `id` may pay `counterparty`. Only the exact
+    /// magic answer is a yes: a revert, running out of gas, no code, or any other answer is a no.
+    function _listAllows(address list, uint256 id, bytes32 counterparty) internal view returns (bool) {
+        (bool ok, bytes memory answer) =
+            list.staticcall{gas: LIST_GAS}(abi.encodeCall(ICrestList.allows, (address(this), id, counterparty)));
+        return ok && answer.length == 32 && bytes32(answer) == bytes32(ICrestList.allows.selector);
     }
 
     function _requireExists(uint256 id) internal view {
