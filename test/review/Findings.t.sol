@@ -7,8 +7,8 @@ import {CrestVault} from "../../src/CrestVault.sol";
 import {ICrestVault} from "../../src/ICrestVault.sol";
 import {CrestBase} from "../CrestBase.sol";
 
-/// Review of PR 2 (vault-v01). Each test here is an attack the design says must fail. On the PR's code each one
-/// FAILS, which is the finding. A fix makes it pass.
+/// Review of PR 2 (vault-v01). Each test here is an attack the design says must fail. Each one failed on the code
+/// the review read, which was the finding; each passes since its fix.
 contract ReviewFindingsTest is CrestBase {
     CrestVault internal child;
     uint256 internal subInChild;

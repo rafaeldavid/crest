@@ -7,7 +7,7 @@ import {CrestVault} from "../../src/CrestVault.sol";
 import {ICrestVault} from "../../src/ICrestVault.sol";
 import {CrestBase} from "../CrestBase.sol";
 
-/// Review of PR 2 (vault-v01). Behaviour that follows docs/design.md as written but that an principal may not expect.
+/// Review of PR 2 (vault-v01). Behaviour that follows docs/design.md as written but that a principal may not expect.
 /// Each test passes on the PR's code and shows what happens today.
 contract ReviewObservationsTest is CrestBase {
     uint256 internal subGrant;
@@ -56,8 +56,8 @@ contract ReviewObservationsTest is CrestBase {
         assertEq(usdc.balanceOf(address(child)), 0);
     }
 
-    /// O4. When the parent vault takes money back, the child's event names the parent vault as `by`, not the key
-    /// that asked; the parent emits nothing.
+    /// O4. When the parent vault takes money back, the child's event names the parent vault as `by`; the parent's own
+    /// `ChildTakenBack` names the key that asked.
     function test_observe_takeBackRecordsTheParentVaultAsBy() public {
         vm.prank(buyer);
         CrestVault child = CrestVault(vault.createChild(agentGrant, 0, ""));

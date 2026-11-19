@@ -77,7 +77,7 @@ contract CrestVault is ICrestVault {
         address proposed = pendingPrincipal;
         if (proposed == address(0) || msg.sender != proposed) revert NotAuthorized();
         uint256 held = grantOf[proposed];
-        if (held != 0) {
+        if (held != 0 && held != ROOT) {
             _grants[held].closed = true;
             emit Closed(held, proposed, note);
         }

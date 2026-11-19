@@ -16,11 +16,11 @@ import {AuthCaptureEscrow} from "commerce-payments/AuthCaptureEscrow.sol";
 ///
 ///         Who may do what. A top vault's principal withdraws, enables modules, hands the vault over and acts on any
 ///         grant. A controller above a grant, at any level, may pause, resume, close or set the limits of that grant
-///         and list its counterparties; a closed grant's controller has no authority. A grant's own controller may
-///         pause or close itself and, while its path is open and its grant allows it, grant children and create and
-///         fill child vaults. It can never widen, resume or reopen its own grant. A pause can be lifted by anyone above
-///         the paused grant, so to stop an agent and everything below it, pause or close the agent's own grant.
-///         Closing a grant frees its key, so the principal can give that key a grant again or a new role.
+///         and list its counterparties; a closed grant's controller loses that authority, though in a child vault it
+///         made it still manages grants that cannot pay. A grant's own controller may pause or close itself and, while
+///         its path is open and its grant allows it, grant children and create and fill child vaults. It never widens,
+///         resumes or reopens its own grant. Anyone above a paused grant can lift the pause, so pause or close an
+///         agent's own grant to stop all below it. Closing frees the key, not the grant; any granter may reuse the key.
 ///
 ///         Child vaults. A grant's controller may create a child vault through this vault, be its principal for good,
 ///         and fill it from this vault within the grant's period and total limits. The child's root extends that grant:
@@ -79,7 +79,7 @@ interface ICrestVault {
         uint32 open;
     }
 
-    /// @notice A commitment a module opened: which grant paid, how much, and which module may release it.
+    /// @notice A commitment a module opened: which grant paid, how much, and which module may end it.
     struct Open {
         uint256 grant;
         uint128 amount;

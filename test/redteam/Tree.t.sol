@@ -143,8 +143,8 @@ contract RedTeamTreeTest is RedTeamBase {
     // Handover
 
     /// The principal proposes a new key. The agent, which may delegate, sees the proposal and gives that key a grant of its
-    /// own first. Fails today: `acceptPrincipal` refuses a key that holds any grant (`CrestVault.sol:81`), any controller
-    /// that may delegate can give any free key a grant (`CrestVault.sol:120`), and no function ever frees a key's slot.
+    /// own first. It failed on the code the red team read: `acceptPrincipal` refused a key that held any grant, and no
+    /// function freed a key's slot. It passes since `acceptPrincipal` closes the grant the proposed key holds.
     function test_attack_agentTakesTheProposedPrincipalsKeySlot_blocksTheHandover() public {
         address next = makeAddr("next principal");
         vm.prank(principal);
@@ -158,9 +158,9 @@ contract RedTeamTreeTest is RedTeamBase {
         assertEq(vault.principal(), next, "the agent blocked the principal's handover to the key it chose");
     }
 
-    /// The same, after the principal closed the agent and turned off its delegation. Fails today: `grant` checks only
-    /// that the direct parent is not closed (`CrestVault.sol:116`), and authority above a grant (`_above`) ignores the
-    /// state of the grant that gives it, so a closed agent still grants under its open sub-agent.
+    /// The same, after the principal closed the agent and turned off its delegation. It failed on the code the red team
+    /// read: `grant` checked only that the direct parent was open, and `_above` ignored a closed grant. It passes since
+    /// `grant` needs an open path and a closed grant's controller has no authority below it.
     function test_attack_closedAgentStillTakesKeySlotsThroughItsSubAgent() public {
         vm.prank(buyer);
         uint256 subGrant = vault.grant(agentGrant, sub, _wide(), 0, "");

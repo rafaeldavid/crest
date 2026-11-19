@@ -5,7 +5,7 @@ import {CrestVault} from "../src/CrestVault.sol";
 import {ICrestVault} from "../src/ICrestVault.sol";
 import {CrestBase} from "./CrestBase.sol";
 
-/// The factory: anyone creates an principal's vault and gains nothing; addresses are known in advance; code is fixed.
+/// The factory: anyone creates a principal's vault and gains nothing; addresses are known in advance; code is fixed.
 contract CrestFactoryTest is CrestBase {
     function test_attack_aStrangerCreatesThePrincipalsVault_andGetsNoPower() public {
         address expected = factory.addressOf(principal, address(usdc), bytes32("second"));
