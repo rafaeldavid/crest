@@ -233,7 +233,7 @@ What an operator accepts, checks and sends:
 - **Who pays.** The operator's relayer key pays the gas, which Crow covers for the pilots. A refused funding costs it only the `eth_call`. A funding that passes the simulation and reverts on chain (for example, the principal paused the agent in between) costs it that transaction's gas. The per-buyer write budget bounds that.
 - **Neutrality.** An operator that will not relay stops nothing: the agent, another operator or anyone with ETH can send the same call to the module.
 
-### 14. The fee (decided: none now, with fee code; the design below is proposed, for the maintainer)
+### 14. The fee (decided 2026-11-19; built)
 
 The maintainer, asked whether Crest charges a fee: "None now, but have fee code in the contract". The fee is the one place where Crest could give someone power over a principal's money, so the design comes before the code.
 
@@ -281,7 +281,30 @@ Attack tests that must fail:
 - a `withdraw`, a fill or a return that takes the fee owed;
 - `collectFee` sending anything but `feeOwed`, or to anyone but the recipient.
 
-Every fee line is in the outside review's scope: the maintainer set it to all six contract files, in deep mode.
+**Decided and built.** The maintainer: "looks good to me, fees set at Factory level upon deployment and then withheld and collected by a sweeper contract". On the sweeper's destination: "9. Where Crest's sweeper sends fees: Decide when a fee is switched on; a stand-in for now".
+
+His sentence matches the proposal on the first two points:
+- **Fixed at deployment in the factory.** No setter, no owner, no way to change it.
+- **Withheld.** The vault owes the fee and pays it later, never at payment time.
+
+It changes the third: the fixed recipient is a sweeper contract that collects. What was built:
+- **The factory.** `CrestFactory(feeBps, feeSweeper)` deploys the vault implementation with both as immutables, so every vault and child vault from it reads `FEE_BPS` and `FEE_SWEEPER` and nothing can change them. Its constructor refuses a rate above 10,000, or a non-zero rate with no sweeper. A rate of 0 may name no sweeper.
+- **A payment.** It owes `floor(amount × FEE_BPS / 10,000)`, added to `feeOwed` with a `FeeOwed(grant, fee)` event.
+  - The fee counts with the payment against every limit on the path, in this vault and in every ancestor vault. So a payment that exactly meets a limit is refused by name once its fee is counted: `OverPerSpend`, `OverPerPeriod` or `OverLifetime`.
+  - A payment, a withdrawal, a fill or a return that would leave less than `feeOwed` in the vault is refused with `BalanceBelowFee`. The ERC-3009 authorization stays the payment's own amount, so a hold receives exactly its terms.
+- **Collecting.** `collectFee()` zeroes `feeOwed` first, then pays it to `FEE_SWEEPER`. Anyone may call it, and it pays no one else.
+- **The sweeper.** `CrestFeeSweeper(destination)` has no owner and no setter.
+  - `sweep(vault)` has the vault pay its fee, then forwards the sweeper's whole balance of that token to the fixed destination. Anyone may call it.
+  - A vault of another factory pays its own sweeper, never this one.
+  - The vault never calls the sweeper. So a sweeper that reverts, misbehaves or re-enters, or a token that refuses its forward, can neither block a payment, a withdrawal or a stop, nor take more than the fee owed. A failed sweep leaves the fee owed and payments going on.
+- **At a rate of 0.** No fee is ever owed. A payment's extra cost is the comparison of one immutable, measured in the pull request.
+- **The destination.** Rafa decides it when a fee is switched on, as a wallet that needs two of three keys. For the rate-0 factory on the test network, the sweeper stand-in is the session deployer's address, `0xa27Cd8A0cF6D15559aF9E6Ff9ebd885da57C3E6a`: no fee accrues, so nothing is ever sent there. The deploy script refuses a non-zero rate unless the sweeper is a contract. A factory with a real rate needs the maintainer's choice of destination first.
+
+- **Measured (2026-11-19).**
+  - **Gas.** A funding through the module costs 428,459 execution gas before the fee code and 429,148 with it at a rate of 0: 689 gas more, or 0.16%.
+  - **Lines.** `CrestVault.sol` went from 481 to 514, `CrestFactory.sol` from 60 to 62, and `ICrestVault.sol` from 307 to 325. The six contract files went from 1,046 to 1,099. `CrestFeeSweeper.sol` (27 lines) and `ICrestFeeSweeper.sol` (22) are new, so the eight files hold 1,148.
+
+Every fee line is in the outside review's scope: the maintainer set it to all six contract files, in deep mode, and the sweeper and its interface add two files.
 
 ### 15. Approved merchants in a list contract the principal chooses (decided; the design below is proposed, for the maintainer; not built)
 
@@ -420,7 +443,7 @@ What was built (`grantBySig`, `cancelSignedGrant`, `SignedGrant`):
 
 ## Open, for the maintainer
 
-1. **The fee's design** (section 14): fixed at deployment in the vault implementation, taken only on a payment, rounded down, never on the hold. To accept or change before it is built.
+1. **The fee** (section 14): decided and built. The sweeper's destination is decided when a fee is switched on.
 2. **The external merchant list's design** (section 15): one list contract per grant, set with the limits, asked read-only and gas-capped at every level. To accept or change before it is built.
 3. **Grants by signature** (section 17): decided and built, shape (a).
 4. **Holdback's side of the vault as the buyer** (section 12):

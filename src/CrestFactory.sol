@@ -12,8 +12,10 @@ contract CrestFactory is ICrestFactory {
     address public immutable IMPLEMENTATION;
     mapping(address vault => bool) public isVault;
 
-    constructor() {
-        IMPLEMENTATION = address(new CrestVault());
+    /// @param feeBps The fee every vault from this factory owes on a payment, in basis points; 0 for none.
+    /// @param feeSweeper The contract every vault from this factory pays its fees to; may be 0 when `feeBps` is 0.
+    constructor(uint256 feeBps, address feeSweeper) {
+        IMPLEMENTATION = address(new CrestVault(feeBps, feeSweeper));
     }
 
     /// @inheritdoc ICrestFactory

@@ -45,6 +45,13 @@ import {AuthCaptureEscrow} from "commerce-payments/AuthCaptureEscrow.sol";
 ///         reason, a ticket, or the hash of a document kept elsewhere. It is public, so a principal that wants the
 ///         reason private puts a hash there.
 ///
+///         Fees. The factory fixes a rate (`FEE_BPS`, basis points) and a sweeper (`FEE_SWEEPER`) in every vault it
+///         creates, and nothing changes either afterwards. A payment owes `floor(amount × FEE_BPS / 10,000)` on top of
+///         itself; the fee counts with the payment against every limit on the path, so a payment that exactly meets a
+///         limit is refused once its fee is counted. The vault keeps what it owes (`feeOwed`), moves only the balance
+///         above it, and pays it to the sweeper on `collectFee`. It never calls the sweeper. At a rate of 0 nothing
+///         is owed. No fee on a deposit, a withdrawal, money coming back, or a move to or from a child vault.
+///
 ///         Money already committed. A vault has no function that can move money a venue holds. Its only call into a
 ///         venue is a Commerce Payments escrow's payer-only `reclaim`, after that escrow's expiry, which returns money to
 ///         the vault.
@@ -130,6 +137,8 @@ interface ICrestVault {
     event ChildTakenBack(address indexed child, uint256 indexed grant, uint256 amount, address indexed by, bytes note);
     event ReturnedToParent(address indexed parent, uint256 amount, address indexed by, bytes note);
     event Reclaimed(address indexed module, address indexed escrow, uint256 amount);
+    event FeeOwed(uint256 indexed grant, uint256 fee);
+    event FeeCollected(address indexed sweeper, uint256 amount, address indexed by);
 
     // Errors. A refusal by a limit names the grant that refused.
 
@@ -159,6 +168,8 @@ interface ICrestVault {
     error CounterpartyNotAllowed(uint256 grant);
     error BadGrantSignature();
     error KeyNotFresh();
+    error InvalidFee();
+    error BalanceBelowFee();
     error SignedGrantExpired();
 
     // Setup
@@ -263,6 +274,10 @@ interface ICrestVault {
     ///         returns the money to the vault.
     function reclaim(address module, AuthCaptureEscrow.PaymentInfo calldata paymentInfo) external;
 
+    /// @notice Anyone has the vault pay `feeOwed` to `FEE_SWEEPER`, zeroing it first.
+    /// @return owed What was paid.
+    function collectFee() external returns (uint256 owed);
+
     /// @notice ERC-1271: yes to the token only, for a digest `charge` approved in this transaction.
     function isValidSignature(bytes32 hash, bytes calldata signature) external view returns (bytes4);
 
@@ -288,6 +303,9 @@ interface ICrestVault {
     function payeeOf(address module) external view returns (address);
 
     function principal() external view returns (address);
+    function FEE_BPS() external view returns (uint256);
+    function FEE_SWEEPER() external view returns (address);
+    function feeOwed() external view returns (uint256);
     function pendingPrincipal() external view returns (address);
     function token() external view returns (address);
     function factory() external view returns (address);

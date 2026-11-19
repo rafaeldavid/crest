@@ -30,6 +30,9 @@ contract CrestVault is ICrestVault, EIP712 {
     bytes4 internal constant ERC1271_MAGIC = 0x1626ba7e;
     bytes4 internal constant ERC1271_NO = 0xffffffff;
 
+    uint256 public immutable FEE_BPS;
+    address public immutable FEE_SWEEPER;
+
     address public principal;
     address public pendingPrincipal;
     address public token;
@@ -45,8 +48,13 @@ contract CrestVault is ICrestVault, EIP712 {
     mapping(address module => address payee) internal _payees;
     /// Keys whose grant here closed, and previous principals: a signed grant never names one.
     mapping(address key => bool) internal _retired;
+    uint256 public feeOwed;
 
-    constructor() {
+    /// The factory's fee, fixed in the implementation every clone of it runs.
+    constructor(uint256 feeBps, address feeSweeper) {
+        if (feeBps > 10_000 || (feeBps != 0 && feeSweeper == address(0))) revert InvalidFee();
+        FEE_BPS = feeBps;
+        FEE_SWEEPER = feeSweeper;
         principal = address(1);
     }
 
@@ -112,6 +120,7 @@ contract CrestVault is ICrestVault, EIP712 {
     /// @inheritdoc ICrestVault
     function withdraw(address to, uint256 amount, bytes calldata note) external {
         _requireTopPrincipal();
+        _requireAboveFee(amount);
         emit Withdrawn(to, amount, note);
         SafeTransferLib.safeTransfer(token, to, amount);
     }
@@ -230,6 +239,7 @@ contract CrestVault is ICrestVault, EIP712 {
         if (id == 0) revert UnknownChild();
         if (!authorityOver(msg.sender, id)) revert NotAuthorized();
         _requireDelegable(id);
+        _requireAboveFee(amount);
         uint128 a = _amount(amount);
         for (uint256 g = id; g != 0; g = _grants[g].parent) {
             _chargeOne(g, a, bytes32(0), false);
@@ -252,6 +262,7 @@ contract CrestVault is ICrestVault, EIP712 {
         address p = parent;
         if (p == address(0)) revert NotChildVault();
         if (msg.sender != p && !authorityOver(msg.sender, ROOT)) revert NotAuthorized();
+        _requireAboveFee(amount);
         emit ReturnedToParent(p, amount, msg.sender, note);
         SafeTransferLib.safeTransfer(token, p, amount);
     }
@@ -273,11 +284,18 @@ contract CrestVault is ICrestVault, EIP712 {
         if (leaf == 0) revert NoGrant();
         if (_opens[commitment].module != address(0)) revert CommitmentOpen();
         uint128 a = _amount(amount);
+        uint128 fee = FEE_BPS == 0 ? 0 : uint128(uint256(a) * FEE_BPS / 10_000);
+        uint128 total = a + fee;
         for (uint256 g = leaf; g != 0; g = _grants[g].parent) {
-            _chargeOne(g, a, counterparty, true);
+            _chargeOne(g, total, counterparty, true);
         }
         _opens[commitment] = Open({grant: leaf, amount: a, module: msg.sender});
-        if (parent != address(0)) ICrestVault(parent).checkPath(parentGrant, amount, counterparty);
+        if (parent != address(0)) ICrestVault(parent).checkPath(parentGrant, total, counterparty);
+        if (fee != 0) {
+            feeOwed += fee;
+            emit FeeOwed(leaf, fee);
+        }
+        _requireAboveFee(a);
         bytes32 digest = keccak256(
             abi.encodePacked(
                 "\x19\x01",
@@ -320,6 +338,14 @@ contract CrestVault is ICrestVault, EIP712 {
         uint256 before = SafeTransferLib.balanceOf(token, address(this));
         AuthCaptureEscrow(escrow).reclaim(paymentInfo);
         emit Reclaimed(module, escrow, SafeTransferLib.balanceOf(token, address(this)) - before);
+    }
+
+    /// @inheritdoc ICrestVault
+    function collectFee() external returns (uint256 owed) {
+        owed = feeOwed;
+        feeOwed = 0;
+        emit FeeCollected(FEE_SWEEPER, owed, msg.sender);
+        if (owed != 0) SafeTransferLib.safeTransfer(token, FEE_SWEEPER, owed);
     }
 
     /// @inheritdoc ICrestVault
@@ -464,6 +490,13 @@ contract CrestVault is ICrestVault, EIP712 {
         if (parent == address(0)) return;
         if (payment) ICrestVault(parent).checkPath(parentGrant, amount, counterparty);
         else ICrestVault(parent).checkDelegable(parentGrant);
+    }
+
+    /// With a fee, refuses a move that would leave less than the fee owed. At a rate of 0 nothing is ever owed.
+    function _requireAboveFee(uint256 amount) internal view {
+        if (FEE_BPS != 0 && SafeTransferLib.balanceOf(token, address(this)) < amount + feeOwed) {
+            revert BalanceBelowFee();
+        }
     }
 
     function _requireExists(uint256 id) internal view {
