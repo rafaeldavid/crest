@@ -33,6 +33,8 @@ export interface LocalWorld {
   rules: string;
   factory: string;
   module: string;
+  /** Crest's default approved-seller list (since Crest PR 9). */
+  allowList: string;
   seller: { base: string; quote: string; defaults: string; address: string; hold(on: boolean): void };
   /** Test ETH for an address, on anvil only. */
   fundEth(address: string): Promise<void>;
@@ -126,6 +128,7 @@ export async function startWorld(o: { log?: (l: string) => void; sellerLog?: (l:
     const factoryInputs = (crestArtifact('CrestFactory').abi.find((x: J) => x.type === 'constructor')?.inputs ?? []).length;
     const factory = await deploy('CrestFactory', factoryInputs === 2 ? [0, '0x0000000000000000000000000000000000000000'] : []);
     const module = await deploy('HoldbackModule', [d.rules]);
+    const allowList = await deploy('CrestAllowList', []);
     say(`Crest: factory ${factory.address} (${factory.gas} gas), module ${module.address} (${module.gas} gas).`);
 
     const send = async (key: string, to: string, abi: J[], fn: string, args: unknown[]) => {
@@ -139,7 +142,7 @@ export async function startWorld(o: { log?: (l: string) => void; sellerLog?: (l:
     const bal = (a: string): Promise<bigint> => publicClient.readContract({ address: d.token, abi: v.erc20Abi, functionName: "balanceOf", args: [a] });
     return {
       root, rpc: anvil.rpcUrl, chainId: anvil.chainId, operators, deployment, deploymentJson: JSON.stringify(deployment),
-      token: String(d.token).toLowerCase(), rules: String(d.rules).toLowerCase(), factory: factory.address, module: module.address,
+      token: String(d.token).toLowerCase(), rules: String(d.rules).toLowerCase(), factory: factory.address, module: module.address, allowList: allowList.address,
       seller: { base, quote: `${base}/quote`, defaults: `${base}/defaults`, address: String(seller.agent.address).toLowerCase(), hold: (on: boolean) => { held = on; } },
       fundEth,
       mint: async (a, amount) => { const before = await bal(a); await chain.mint(a, amount); for (let i = 0; i < 150 && (await bal(a)) < before + amount; i++) await new Promise((r) => setTimeout(r, 200)); },

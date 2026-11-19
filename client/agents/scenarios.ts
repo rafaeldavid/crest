@@ -2,7 +2,7 @@
 // the principal and the runner around one or more purchases; each purchase is one session of the buying agent, which
 // buys only through its company's installed commands and the vault. The seller is Crow's own test seller, scripted.
 // H is the hold of one purchase (price plus the adjudication fee), read from a probe quote when the world starts.
-import { MAX128, OPEN, Principal, type Caps } from './principal.ts';
+import { DEFAULT_LIST, MAX128, OPEN, Principal, type Caps } from './principal.ts';
 
 /** Who the deal's buyer is, for every scenario: the agent's key (the baseline), or the vault (Crest's next build). */
 export const BUYER: 'agent' | 'vault' = 'agent';
@@ -34,7 +34,7 @@ export interface Ctx {
 
 export interface Scenario { n: number; name: string; title: string; expect: string; caps(H: bigint, periodSec: number): Caps & { allowMerchant?: boolean }; run(c: Ctx): Promise<void> }
 
-const inside = (H: bigint): Caps => ({ ...OPEN, perSpend: 5n * H, maxOpen: 10, restricted: true });
+const inside = (H: bigint): Caps => ({ ...OPEN, perSpend: 5n * H, maxOpen: 10, list: DEFAULT_LIST });
 const released = 'Released';
 const refused = (name: string) => `refused ${name}`;
 

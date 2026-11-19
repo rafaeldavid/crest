@@ -195,7 +195,7 @@ try {
     const caps = s.caps(H, periodSec);
     const { allowMerchant, ...grantCaps } = caps;
     const grant = await principal.grant(agent.address, grantCaps as Caps, { why: `scenario ${s.n}` });
-    if (allowMerchant && grantCaps.restricted) await principal.allow(grant, merchant, 'Crow test seller with the demo adjudicators');
+    if (allowMerchant && grantCaps.list === 'default') await principal.allow(grant, merchant, 'Crow test seller with the demo adjudicators');
     await principal.fund(20n * H);
     rec.add('runner', 'scenario.start', { n: s.n, name: s.name, title: s.title, expect: s.expect, vault: principal.vault, principal: principal.address, agent: agent.address, grant: grant.toString(), caps: JSON.parse(JSON.stringify(grantCaps, (_k, x) => (typeof x === 'bigint' ? x.toString() : x))), hold: H.toString(), buyerIs: BUYER, crest: crestCommit, buyer: buyerSide, model: model?.id ?? 'scripted', world: { engine: `anvil (chain ${w.chainId}) with Holdback's contracts, the operators' own code, Crow's test seller`, operators: w.operators, rules: w.rules, factory: w.factory, module: w.module } });
 
