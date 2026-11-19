@@ -141,7 +141,7 @@ async function grantWords(p: { vault: string; id: bigint; g: J; isAgent: boolean
     lifetime: limitText(BigInt(c.lifetime), MAX.u128), spent: `${units(BigInt(p.g.spent))} tUSDC`,
     openDeals: Number(p.g.open), openLimit: BigInt(c.maxOpen) === MAX.u32 ? 'no limit' : Number(c.maxOpen),
     expires: Number(c.expiresAt) === 0 ? 'never' : new Date(Number(c.expiresAt) * 1000).toISOString(),
-    approvedSellersOnly: c.restricted, mayDelegate: c.mayDelegate,
+    approvedSellers: /^0x0{40}$/i.test(String(c.list)) ? 'any seller' : `the list at ${String(c.list).toLowerCase()}`, mayDelegate: c.mayDelegate,
   };
 }
 

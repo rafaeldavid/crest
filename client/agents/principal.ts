@@ -9,12 +9,16 @@ const abi = (n: string): J[] => JSON.parse(readFileSync(new URL(`../../out/${n}.
 export const VAULT_ABI = abi('CrestVault');
 export const FACTORY_ABI = abi('CrestFactory');
 export const MODULE_ABI = abi('HoldbackModule');
+export const LIST_ABI = abi('CrestAllowList');
+const ZERO = '0x0000000000000000000000000000000000000000';
+/** A grant's approved-seller list: Crest's default list contract (since Crest PR 9), or 0 for any seller. */
+export const DEFAULT_LIST = 'default';
 export const MAX128 = (1n << 128n) - 1n;
 export const MAX32 = Number((1n << 32n) - 1n);
 
-export interface Caps { perSpend: bigint; perPeriod: bigint; lifetime: bigint; maxOpen: number; period: number; expiresAt: number; restricted: boolean; mayDelegate: boolean }
+export interface Caps { perSpend: bigint; perPeriod: bigint; lifetime: bigint; maxOpen: number; period: number; expiresAt: number; mayDelegate: boolean; list: string }
 /** No limit of any kind, a UTC day as the period, any seller: the start every scenario narrows. */
-export const OPEN: Caps = { perSpend: MAX128, perPeriod: MAX128, lifetime: MAX128, maxOpen: MAX32, period: 86_400, expiresAt: 0, restricted: false, mayDelegate: false };
+export const OPEN: Caps = { perSpend: MAX128, perPeriod: MAX128, lifetime: MAX128, maxOpen: MAX32, period: 86_400, expiresAt: 0, mayDelegate: false, list: ZERO };
 const note = (s: string) => `0x${Buffer.from(s, 'utf8').toString('hex')}`;
 const salt = () => `0x${Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('hex')}`;
 
@@ -41,13 +45,16 @@ export class Principal {
   async grant(controller: string, caps: Caps, o: { parent?: bigint; vault?: string; key?: string; why?: string } = {}): Promise<bigint> {
     const v = await viem();
     const vault = o.vault ?? this.vault;
-    const r = await this.w.send(o.key ?? this.key, vault, VAULT_ABI, 'grant', [o.parent ?? 1n, controller, caps, salt(), note(o.why ?? 'agent grant')]);
+    const r = await this.w.send(o.key ?? this.key, vault, VAULT_ABI, 'grant', [o.parent ?? 1n, controller, this.onChain(caps), salt(), note(o.why ?? 'agent grant')]);
     const ev = r.logs.map((l: J) => { try { return v.decodeEventLog({ abi: VAULT_ABI, data: l.data, topics: l.topics }); } catch { return null; } }).find((e: J) => e?.eventName === 'Granted');
     return ev.args.id as bigint;
   }
-  setCaps(id: bigint, caps: Caps, why: string) { return this.w.send(this.key, this.vault, VAULT_ABI, 'setCaps', [id, caps, note(why)]); }
+  /** The caps as the vault takes them: the default list named by its address. */
+  onChain(caps: Caps): Caps { return { ...caps, list: caps.list === DEFAULT_LIST ? this.w.allowList : caps.list }; }
+  setCaps(id: bigint, caps: Caps, why: string) { return this.w.send(this.key, this.vault, VAULT_ABI, 'setCaps', [id, this.onChain(caps), note(why)]); }
   setPaused(id: bigint, paused: boolean, why: string) { return this.w.send(this.key, this.vault, VAULT_ABI, 'setPaused', [id, paused, note(why)]); }
-  allow(id: bigint, counterparty: string, why: string) { return this.w.send(this.key, this.vault, VAULT_ABI, 'allow', [id, counterparty, true, note(why)]); }
+  /** Approves a seller (its payout address with the deal's three adjudicators) on the default list, for grant `id`. */
+  allow(id: bigint, counterparty: string, why: string) { return this.w.send(this.key, this.w.allowList, LIST_ABI, 'set', [this.vault, id, counterparty, true, note(why)]); }
   withdraw(amount: bigint, why: string) { return this.w.send(this.key, this.vault, VAULT_ABI, 'withdraw', [this.address, amount, note(why)]); }
   fund(amount: bigint) { return this.w.mint(this.vault, amount); }
   getGrant(id: bigint, vault = this.vault): Promise<J> { return this.w.read(vault, VAULT_ABI, 'getGrant', [id]); }
