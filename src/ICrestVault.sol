@@ -158,6 +158,7 @@ interface ICrestVault {
     error TooManyOpen(uint256 grant);
     error CounterpartyNotAllowed(uint256 grant);
     error BadGrantSignature();
+    error KeyNotFresh();
     error SignedGrantExpired();
 
     // Setup
@@ -195,8 +196,9 @@ interface ICrestVault {
         returns (uint256 id);
 
     /// @notice Lands `signed` as `grant` would for its signer, and lists its counterparties, by anyone until its
-    ///         deadline, for a key that holds no grant here: moving a key takes a transaction. `signature` is a
-    ///         65-byte ECDSA signature with a low `s`: a contract controller grants by transaction.
+    ///         deadline, for a fresh key: one that has never held a grant here, nor been this vault's principal. A key
+    ///         that held one is granted again, or moved, by transaction. `signature` is a 65-byte ECDSA signature with
+    ///         a low `s`: a contract controller grants by transaction.
     /// @return id The new grant's ID.
     function grantBySig(SignedGrant calldata signed, bytes calldata signature) external returns (uint256 id);
 

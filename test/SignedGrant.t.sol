@@ -174,7 +174,7 @@ contract SignedGrantTest is CrestBase {
         ICrestVault.SignedGrant memory s = _slip();
         bytes memory sig = _signed(BUYER_PK, vault, s);
         vault.grantBySig(s, sig);
-        vm.expectRevert(ICrestVault.GrantExists.selector);
+        vm.expectRevert(ICrestVault.KeyNotFresh.selector);
         vault.grantBySig(s, sig);
     }
 
@@ -184,7 +184,7 @@ contract SignedGrantTest is CrestBase {
         vault.grantBySig(s, sig);
         vm.prank(buyer);
         vault.close(_idOf(s), "");
-        vm.expectRevert(ICrestVault.GrantExists.selector);
+        vm.expectRevert(ICrestVault.KeyNotFresh.selector);
         vault.grantBySig(s, sig);
     }
 
@@ -285,7 +285,7 @@ contract SignedGrantTest is CrestBase {
         uint256 otherGrant = vault.grant(ROOT, other, _wide(), bytes32("other"), "");
         ICrestVault.SignedGrant memory s = _slip();
         s.controller = other;
-        vm.expectRevert(ICrestVault.GrantExists.selector);
+        vm.expectRevert(ICrestVault.KeyNotFresh.selector);
         vault.grantBySig(s, _signed(BUYER_PK, vault, s));
         assertEq(vault.grantOf(other), otherGrant);
     }
@@ -373,7 +373,7 @@ contract SignedGrantTest is CrestBase {
 
     // From the review of PR 7
 
-    /// An older slip never replaces the key's later grant: a slip lands only for a key that holds no grant here.
+    /// An older slip never replaces the key's later grant: a slip lands only for a fresh key.
     function test_attack_aSlipForAKeyThatHoldsAGrant_refused() public {
         ICrestVault.SignedGrant memory a = _slip();
         a.caps = _caps(HOLD, 3 * HOLD, type(uint128).max, 2, true, false);
@@ -381,27 +381,28 @@ contract SignedGrantTest is CrestBase {
         vm.prank(buyer);
         uint256 narrow = vault.grant(agentGrant, sub, _caps(HOLD, HOLD, HOLD, 1, true, false), bytes32("narrow"), "");
         vm.prank(stranger);
-        vm.expectRevert(ICrestVault.GrantExists.selector);
+        vm.expectRevert(ICrestVault.KeyNotFresh.selector);
         vault.grantBySig(a, sigA);
         assertFalse(_grantOf(vault, narrow).closed, "the later grant stays");
         assertEq(vault.grantOf(sub), narrow);
     }
 
-    /// Two slips for one key: the second lands only once the first grant has closed and freed the key, as a grant by
-    /// transaction could. A stop meant for everything below the agent goes on the agent's own grant.
-    function test_observe_aSecondSlipForOneKey_landsOnlyAfterTheFirstGrantCloses() public {
+    /// Two slips for one key, a spare kept back: the second never lands, neither while the first grant is live nor after
+    /// it closes, so a spare slip cannot restart a sub-agent the principal stopped (the red team's Medium).
+    function test_attack_aSpareSlipForOneKey_neverLands() public {
         ICrestVault.SignedGrant memory a = _slip();
         ICrestVault.SignedGrant memory b = _slip();
         b.salt = bytes32("second task");
         bytes memory sigA = _signed(BUYER_PK, vault, a);
         bytes memory sigB = _signed(BUYER_PK, vault, b);
         vault.grantBySig(a, sigA);
-        vm.expectRevert(ICrestVault.GrantExists.selector);
+        vm.expectRevert(ICrestVault.KeyNotFresh.selector);
         vault.grantBySig(b, sigB);
         vm.prank(principal);
         vault.close(_idOf(a), "");
+        vm.expectRevert(ICrestVault.KeyNotFresh.selector);
         vault.grantBySig(b, sigB);
-        assertEq(vault.grantOf(sub), _idOf(b));
+        assertEq(vault.grantOf(sub), 0);
     }
 
     function test_aSlipAtItsDeadline_lands() public {

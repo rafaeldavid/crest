@@ -43,6 +43,8 @@ contract CrestVault is ICrestVault, EIP712 {
     mapping(uint256 id => mapping(bytes32 counterparty => bool)) public allowed;
     mapping(bytes32 commitment => Open) internal _opens;
     mapping(address module => address payee) internal _payees;
+    /// Keys whose grant here closed, and previous principals: a signed grant never names one.
+    mapping(address key => bool) internal _retired;
 
     constructor() {
         principal = address(1);
@@ -93,6 +95,7 @@ contract CrestVault is ICrestVault, EIP712 {
         }
         address previous = principal;
         delete grantOf[previous];
+        _retired[previous] = true;
         (principal, pendingPrincipal) = (proposed, address(0));
         _grants[ROOT].controller = proposed;
         grantOf[proposed] = ROOT;
@@ -141,7 +144,7 @@ contract CrestVault is ICrestVault, EIP712 {
         );
         address signer = ECDSA.tryRecoverCalldata(_hashTypedData(structHash), signature);
         if (signer == address(0)) revert BadGrantSignature();
-        if (grantOf[signed.controller] != 0) revert GrantExists();
+        if (grantOf[signed.controller] != 0 || _retired[signed.controller]) revert KeyNotFresh();
         id = _grant(signer, signed.parent, signed.controller, signed.caps, signed.salt, signed.note);
         for (uint256 i; i < signed.counterparties.length; ++i) {
             allowed[id][signed.counterparties[i]] = true;
@@ -189,7 +192,10 @@ contract CrestVault is ICrestVault, EIP712 {
         _requireExists(id);
         if (msg.sender != g.controller && !_above(msg.sender, id)) revert NotAuthorized();
         g.closed = true;
-        if (id != ROOT && grantOf[g.controller] == id) delete grantOf[g.controller];
+        if (id != ROOT && grantOf[g.controller] == id) {
+            delete grantOf[g.controller];
+            _retired[g.controller] = true;
+        }
         emit Closed(id, msg.sender, note);
     }
 
