@@ -54,7 +54,7 @@ contract ScriptedList {
         }
         if (m == Mode.Huge) {
             assembly {
-                mstore(0, shl(224, 0x5b2f3f0e))
+                mstore(0, shl(224, 0xe2d832de))
                 return(0, 100000)
             }
         }

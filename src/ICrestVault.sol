@@ -319,8 +319,9 @@ interface ICrestVault {
 /// @notice The merchant list a grant names. The vault asks it read-only, under a fixed gas cap, at every payment.
 interface ICrestList {
     /// @notice Whether `vault`'s grant `grant` may pay `counterparty`. Only this function's selector is a yes; a
-    ///         revert, running out of gas, an address with no code or any other answer is a no. A payment sent with too
-    ///         little gas to give the list its whole cap is refused with `ListGasTooLow`.
+    ///         revert, running out of gas, an address with no code or any other answer is a no. The vault gives the list
+    ///         30,000 gas and reads 32 bytes of its answer; a payment sent with too little gas to give the list its
+    ///         whole cap is refused with `ListGasTooLow`.
     function allows(address vault, uint256 grant, bytes32 counterparty) external view returns (bytes4);
 }
 

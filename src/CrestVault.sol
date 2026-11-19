@@ -464,7 +464,7 @@ contract CrestVault is ICrestVault, EIP712 {
         _walk(id, false, 0, 0);
     }
 
-    /// For a payment, the state, per-payment limit and allow list of every grant on the path; for delegating, the state
+    /// For a payment, the state, per-payment limit and list of every grant on the path; for delegating, the state
     /// and `mayDelegate` of every grant on it. Both continue in every ancestor vault.
     function _walk(uint256 id, bool payment, uint256 amount, bytes32 counterparty) internal view {
         for (uint256 g = id; g != 0; g = _grants[g].parent) {
@@ -525,13 +525,17 @@ contract CrestVault is ICrestVault, EIP712 {
     }
 
     /// Asks `list`, read-only and with `LIST_GAS`, whether grant `id` may pay `counterparty`. Only the exact magic
-    /// answer is a yes: a revert, running out of gas, no code, or any other answer is a no. A call that could not give
-    /// the list its whole `LIST_GAS` (after the 63/64 rule) is refused, so the caller's gas never changes the answer.
-    function _listAllows(address list, uint256 id, bytes32 counterparty) internal view returns (bool) {
+    /// answer is a yes: a revert, running out of gas, no code, or any other answer is a no, and only 32 bytes of the
+    /// answer are ever copied. A call that could not give the list its whole `LIST_GAS` (after the 63/64 rule) is
+    /// refused, so the caller's gas never changes the answer.
+    function _listAllows(address list, uint256 id, bytes32 counterparty) internal view returns (bool yes) {
         if (gasleft() < LIST_GAS * 64 / 63 + 4000) revert ListGasTooLow();
-        (bool ok, bytes memory answer) =
-            list.staticcall{gas: LIST_GAS}(abi.encodeCall(ICrestList.allows, (address(this), id, counterparty)));
-        return ok && answer.length == 32 && bytes32(answer) == bytes32(ICrestList.allows.selector);
+        bytes memory ask = abi.encodeCall(ICrestList.allows, (address(this), id, counterparty));
+        bytes32 want = bytes32(ICrestList.allows.selector);
+        assembly ("memory-safe") {
+            let ok := staticcall(LIST_GAS, list, add(ask, 0x20), mload(ask), 0x00, 0x20)
+            yes := and(and(ok, eq(returndatasize(), 0x20)), eq(mload(0x00), want))
+        }
     }
 
     function _requireExists(uint256 id) internal view {

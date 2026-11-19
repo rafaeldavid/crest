@@ -9,7 +9,6 @@ import {CrestVault} from "../../src/CrestVault.sol";
 import {ICrestList, ICrestVault} from "../../src/ICrestVault.sol";
 import {RedTeamBase, RedTeamMulticall3} from "./RedTeamBase.sol";
 
-/// Code an EIP-7702 account delegates to. It would refuse every ERC-1271 question and counts every call it gets.
 /// A merchant list that allows every counterparty.
 contract AllowEveryList {
     function allows(address, uint256, bytes32) external pure returns (bytes4) {
@@ -17,6 +16,7 @@ contract AllowEveryList {
     }
 }
 
+/// Code an EIP-7702 account delegates to. It would refuse every ERC-1271 question and counts every call it gets.
 contract RefusingAccountCode {
     uint256 public calls;
 

@@ -14,7 +14,9 @@ interface ICrestAllowList is ICrestList {
 
     error NotAuthorized();
 
-    /// @notice Lists or unlists `counterparty` for `vault`'s grant `grant`. By anyone `vault` says is above that grant.
+    /// @notice Lists or unlists `counterparty` for `vault`'s grant `grant`. By anyone `vault` says is above that grant;
+    ///         for a grant that does not exist yet, such as a signed grant not yet landed, only the top principal, and
+    ///         in a child vault anyone above it in an ancestor vault.
     function set(ICrestVault vault, uint256 grant, bytes32 counterparty, bool ok, bytes calldata note) external;
 
     function allowed(address vault, uint256 grant, bytes32 counterparty) external view returns (bool);

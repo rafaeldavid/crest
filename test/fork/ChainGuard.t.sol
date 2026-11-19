@@ -51,6 +51,8 @@ contract DeployOnSepoliaTest is ChainGuardBase {
         assertEq(vm.parseJsonAddress(json, ".factory"), address(f));
         assertEq(vm.parseJsonAddress(json, ".implementation"), f.IMPLEMENTATION());
         assertEq(vm.parseJsonAddress(json, ".holdbackModule"), address(m));
+        assertEq(vm.parseJsonAddress(json, ".allowList"), address(script.allowListAddress()));
+        assertGt(address(script.allowListAddress()).code.length, 0, "the default list is deployed");
         vm.removeFile(path);
         bytes32 salt = keccak256("crest v01");
         bytes memory moduleCode = abi.encodePacked(type(HoldbackModule).creationCode, abi.encode(RULES));
