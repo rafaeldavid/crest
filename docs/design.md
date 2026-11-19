@@ -55,7 +55,7 @@ A second venue is a second module; the vault does not change.
 - **Delegating asks the whole path.** Granting, creating a child vault and filling one each need every grant on the path, here and in every ancestor vault, to be open, unexpired and allowed to delegate. That holds for the grant's own controller and for authority above it, so turning an agent's delegation off stops all delegating at or below it, through its sub-agents and inside its child vaults. Only the top principal grants without it.
 - **A pause has no rank.** Anyone above a paused grant can lift the pause, so a principal who distrusts an agent pauses the agent's own grant, which stops everything below it; the agent cannot lift that.
 - **A key holds one grant per vault, and closing a grant frees its key.** A closed grant's controller has no authority, and delegating needs an open path, so a closed agent cannot act through its sub-agents. A handover closes any grant the new principal's key held, so no agent can block it by giving that key a grant first. In the same way, authority above a key's grant may grant that key anew, and the old grant closes in that transaction, so no agent can hold a key the principal is granting.
-- **A new period length keeps the spend of the last window paid in when that window overlaps the new current one,** so changing a limit's period never hands the agent a fresh window. The vault keeps one window's counter, not a history, so a longer period knows only that last window (open, for the maintainer).
+- **A new period length keeps the spend of the last window paid in when that window overlaps the new current one,** so changing a limit's period never hands the agent a fresh window. The vault keeps one window's counter, not a history, so a longer period knows only that last window (open item 11).
 - **Every change carries who made it and a note.** Each function a principal or a controller calls takes a `note`, and its event carries it with the caller: a reason, a ticket, or the hash of a document kept elsewhere. Limits changes also carry the previous limits. The note is public, so a reason meant to stay private goes in as a hash.
 - **Periods are fixed windows** (`floor(time / period)`), with no carry-over. A refund does not give a period's limit back: the counters are gross, and the refunded money returns to the vault.
 - **Open commitments are counted, not their total.** The total at risk is already bounded by the count times the per-payment limit. The module that opened a commitment releases it when the venue says it has ended; anyone may ask it to.
@@ -78,7 +78,7 @@ A second venue is a second module; the vault does not change.
 
 ### 5. The Holdback module
 
-- **The buyer is the agent's key; the payer is the vault.** The terms name the agent's key as `buyer` and the vault as `buyerPaymentAddress`. The rules contract checks the agent's own agreement; the vault's grant for that key bounds what it may fund.
+- **The buyer is the agent's key; the payer is the vault** (today; section 11 makes the vault the buyer in the next build). The terms name the agent's key as `buyer` and the vault as `buyerPaymentAddress`. The rules contract checks the agent's own agreement; the vault's grant for that key bounds what it may fund.
 - **The counterparty** is the deal's payout address together with its three adjudicators, so a principal approves a merchant and the adjudicators it accepts in one entry. A hold pays out only to the terms' payout address or back to the payer (Holdback, `HoldbackRules.sol:400`) [measured], so the approved-merchant list holds through the escrow.
 - **The amount** is the hold: price plus the adjudication fee. Operator fees are not paid through the module; the pilots' fee is 0.
 - **Open deals end** when the rules contract's stage is Released, Refunded or Settled, or the escrow's expiry has passed.
@@ -107,7 +107,7 @@ No principal, controller, module or factory can stop a funded deal from settling
   - a longer period forgot spend inside the new window (Low);
   - an agent could take a key the principal was about to grant (Low).
 
-  Each is fixed, and the cross-check's attack tests, which failed before, pass since. One case of the period finding stays open for the maintainer (section 2). Its coverage tests add:
+  Each is fixed, and the cross-check's attack tests, which failed before, pass since. One case of the period finding stays open for the maintainer (open item 11). Its coverage tests add:
   - the vault never approves a transfer, cancel or permit digest during a charge;
   - no SELFDESTRUCT, CALLCODE or DELEGATECALL in the vault, the factory or the module;
   - a vault is exactly the library's minimal proxy;
@@ -131,20 +131,262 @@ A research pass on 2026-11-19 read the agent identity and reputation standards: 
 - **No payment reads a registry.** The ERC-8004 registries are upgradeable and controlled by one outside key [measured], so a payment that read them would let that key change who is paid. Approved merchants stay payout addresses, which Holdback's terms enforce.
 - **Crest emits no reputation or validation records.** A reputation system can read Crest's events and Holdback's deal outcomes by the commitment ID; Crest stays a wallet.
 
+### 11. Who the buyer is (decided, 2026-11-19)
+
+The maintainer: "if an agent uses a vault, the vault admin owner should be the buyer, but if agent doesn't have a vault then it would be the buyer I think".
+
+- **With a vault, the vault is the buyer.**
+  - It is named in a deal's terms as `buyer` and stays the `buyerPaymentAddress`.
+  - The agent signs for the vault while its grant can pay.
+  - The principal can sign in the agent's place.
+  - After a stop, the vault refuses the agent, so the principal cuts the agent off from a funded deal.
+  - The principal's key never has to sign a deal, so buying stays autonomous.
+- **Without a vault, the agent's key is the buyer,** as today.
+
+### 12. Build plan: the vault as the buyer (not built)
+
+The build waits for the first stage of the two-model test (T-560), which runs with the agent's key as the buyer. The same scenarios then rerun with the vault as the buyer, plus new ones where the principal steps in on a funded deal.
+
+**What the vault answers, and to whom.** Holdback's rules contract checks `buyer` through Solady's `SignatureCheckerLib`: ECDSA for an address without code, ERC-1271 for one with code (`HoldbackRules.sol:565-570`). It asks for three things:
+- the agreement (`:183`);
+- an early accept (`:339`);
+- the buyer's signature on a settlement both sides sign (`:377`).
+
+So the vault can be the buyer with no change to Holdback's contracts [measured, at the pinned `27ab44e8`].
+
+| Who asks | About what | The vault says yes when |
+|---|---|---|
+| The token | The ERC-3009 `ReceiveWithAuthorization` the vault approved during `charge` | As today: the one digest it holds in transient storage, asked by the token only. Never an agent's signature. |
+| Anyone (a contract, an operator's `eth_call`) | A Holdback buyer message's EIP-712 digest | All three conditions below hold. |
+| Anyone | Anything else | Never. |
+
+The three conditions for a Holdback buyer message:
+1. **The signature decodes.** It carries the message's kind, its fields and a 65-byte ECDSA signature.
+2. **The module rebuilds the digest.** The venue's module, enabled at the top vault, rebuilds the digest from those fields and returns the deal's ID; the digest must equal the one asked about. The vault stays ignorant of venues: the module says what a message is, as it says what a payment is.
+3. **The signer may act.** The signer must be one of:
+   - the controller of the grant that opened that deal (`getOpen(id).grant`), while that grant's path can pay: open, unpaused and unexpired, here and in every ancestor vault;
+   - anyone with authority above that grant, which includes the principal.
+
+**The agreement.** The module recovers the agent's key from the agreement signature and charges that key's grant. The vault then answers the rules contract's check of the agreement for the same deal and the same key.
+
+**A funded deal after a stop.**
+- When the agent's grant, or anything on its path, is paused or closed, the vault refuses that agent's signature on every buyer message for the deals its grant opened: early accept, and a settlement both sides sign.
+- The principal, or any authority above the grant, signs instead.
+- Holdback's own deadlines still run: the adjudicator's decision, refunds at expiry, and the vault's `reclaim`. No deal is stuck.
+- This narrows Holdback's ADR-0038 point 4, "It never touches a funded hold", for a deal whose buyer is a vault. A Holdback decision record needs a line saying so; that is the maintainer's to accept.
+
+**Child vaults.**
+- A child vault is the buyer of its own deals. One principal's agents then deal from separate addresses.
+- Inside the child, a sub-agent signs while its path can pay.
+- The child's principal, and everyone above it in the ancestor vaults, can sign in its place.
+
+**Attack tests that must fail:**
+1. The agent signs for the vault after its grant is paused or closed, or after anything above it is.
+2. A stranger signs: no grant here, and no authority above.
+3. Another agent in the same vault signs a buyer message for a deal it did not open.
+4. The principal's signature on one deal is replayed on another deal.
+5. A signature's fields name one deal while the digest is another deal's.
+6. A message is decoded by a module the principal has disabled.
+7. A digest under another EIP-712 domain, or a deal another vault pays, is presented.
+8. The agent's raw ECDSA signature is offered to the token as the vault's ERC-3009 authorization (`TransferWithAuthorization`, `ReceiveWithAuthorization` or `CancelAuthorization`).
+9. A sibling sub-agent signs for another sub-agent's child vault.
+
+**What Holdback's operators and adjudicator must change.** None of this is Crest's code.
+- **Who carries it.** Holdback's T-549 carries it in schema v0.12 and its two pull requests: the buyer's fields in the schema one, the buyer's checks in the settlement one. It adds them on the maintainer's yes on Holdback's record (D84).
+- **The pinned bundles.** `site/buy.mjs` and `site/try.mjs` stay pinned by hash, so their ECDSA path stays byte-identical. A vault buyer signs through Crest's own tooling or a new command.
+
+The changes:
+- **The check.** Read a buyer's signature as T-549 reads the seller's:
+  - ECDSA for a 65-byte signature from an address without code;
+  - ERC-1271 through `eth_call` otherwise, with a code override (or ERC-6492) for a vault the factory has not deployed yet.
+- **Where the check goes:**
+  - `packages/core/src/eip712.ts`: `verifyTerms`, `verifyMessage` and the check of a message both sides sign recover ECDSA only, at `recoversTo`;
+  - the EVM node's buyer checks in `packages/settlement/evm/evm-settlement.ts`;
+  - SimChain;
+  - the reference adjudicator's buyer checks.
+- **The schema.** Use `PartySignature` for every buyer signature:
+  - the buyer's signature on the terms;
+  - `Agree`;
+  - `EarlyAccept`;
+  - the buyer's half of `Mutual`;
+  - any other message in `messages.schema.json` that the buyer signs.
+
+  The ERC-3009 funding signature stays as it is: for a vault payer, Crest's module ignores its content.
+- **The vault must also answer the terms digest.** That holds if operators keep checking the buyer's signature on the full terms. Then the module rebuilds `CommitmentTerms` as one more message kind.
+
+### 13. Gas: the operators relay a vault's funding (decided, 2026-11-19; not built)
+
+The maintainer, asked who pays the network fee when an agent funds a deal from a vault: "Build the operators' relay after the test, so agents need no ETH", and earlier, "gas we cover". The relay is a build in Holdback's operators, after the first stage of the two-model test (T-560). Nothing in Crest changes.
+
+What an operator accepts, checks and sends:
+- **What it accepts.** The same signed messages the funding route takes today for a key buyer: the seller's signature, the adjudicator's acceptance, the buyer's agreement and a funding signature. Measured: the funding signature is not checked off chain (`fund` in core). For a vault payer, Crest's module ignores its content and requires 65 bytes. So there is no new route and no schema change [inferred; the T-549 build confirms it].
+- **What it checks before sending:**
+  1. The payer, `buyerPaymentAddress`, is a vault of a factory the operator lists: `isVault(payer)`. The factory is listed as the rules contract is.
+  2. The vault pays through this rules deployment's module: `payeeOf(module)` is the rules contract's ERC-3009 collector.
+  3. `module.agreeAndFund(...)` succeeds in an `eth_call`. A revert is the vault refusing (a limit, a stop or an allow list). The operator returns it to the agent as a problem and sends nothing.
+- **What it sends.** The module call, from its own relayer key. It follows the deal as it follows any funding. Measured on a local chain at `e532074`: the node followed a funding sent through Crest's module to Released, with no node change.
+- **Who pays.** The operator's relayer key pays the gas, which Crow covers for the pilots. A refused funding costs it only the `eth_call`. A funding that passes the simulation and reverts on chain (for example, the principal paused the agent in between) costs it that transaction's gas. The per-buyer write budget bounds that.
+- **Neutrality.** An operator that will not relay stops nothing: the agent, another operator or anyone with ETH can send the same call to the module.
+
+### 14. The fee (decided: none now, with fee code; the design below is proposed, for the maintainer)
+
+The maintainer, asked whether Crest charges a fee: "None now, but have fee code in the contract". The fee is the one place where Crest could give someone power over a principal's money, so the design comes before the code.
+
+The proposal, with the reason for each part:
+1. **Fixed at deployment, by no one afterwards.**
+   - The rate (`FEE_BPS`, an integer in basis points, 0 today) and the recipient are immutables of the vault implementation.
+   - The factory's constructor sets them when it deploys the implementation, and every vault and child vault from that factory carries them for good.
+   - There is no setter, no owner and no upgrade, so no key, Crow's included, can raise a fee on money already in a vault.
+   - A new rate means a new factory at a new address. A principal moves to it by creating a vault there and withdrawing from the old one.
+   - One rate per factory, rather than one per module: the principal already chooses modules, and a per-module fee would let any module's author set any rate and put every module's fee code in a review's scope. One place is one thing to audit.
+2. **What it is taken on.**
+   - Only a payment a module asks for, in `charge`: `fee = floor(amount × FEE_BPS / 10,000)`, rounded down, so never above the stated rate.
+   - None on a deposit, a `withdraw`, money coming back (a refund, a void or `reclaim`), `fundChild`, `takeBackFromChild` or `returnToParent`.
+   - A child vault's payment charges the fee once, in the vault that pays. The parent's `checkPath` is a view and moves nothing.
+3. **A refused payment charges nothing.** The fee moves inside `charge`, after every check. A refusal anywhere later in the transaction, such as Holdback's agreement call reverting, reverts the fee with it.
+4. **The hold is never blocked or shrunk.**
+   - The fee comes from the vault's balance on top of the payment, in the transaction that funds.
+   - The ERC-3009 authorization stays exactly the payment's amount, so the hold receives what the terms say.
+   - After funding, nothing in Crest reaches the hold, the fee included.
+   - A vault holding less than the amount plus the fee refuses the payment before anything is funded.
+5. **It counts against the limits.** The fee counts with the payment against every limit on the path, so the principal's limits bound everything that leaves the vault. At 0 nothing changes.
+6. **The constructor refuses only the malformed:** a rate above 10,000, or a non-zero rate with no recipient. Any lower cap is the maintainer's choice, not the code's.
+7. **One event, only when there is a fee:** `FeePaid(grant, recipient, fee)`. `Charged` is unchanged.
+8. **At a rate of 0, as near zero cost as measurable.** One comparison of an immutable in `charge`. The gas of a funding before and after goes in the pull request.
+
+Attack tests that must fail:
+- anyone changing the rate or the recipient: no selector can, and none appears in the selector allowlist;
+- a fee above the stated rate through rounding, as a fuzz test over amounts;
+- a fee charged twice through a child vault's path;
+- a fee on a refund, a void, `reclaim`, `withdraw`, `fundChild` or `returnToParent`;
+- a refused payment that still pays a fee;
+- a hold that receives less than its terms;
+- a vault short of the fee that still funds.
+
+Every fee line is in the outside review's scope: the maintainer set it to all six contract files, in deep mode.
+
+### 15. Approved merchants in a list contract the principal chooses (decided; the design below is proposed, for the maintainer; not built)
+
+The maintainer, on approving merchants by an agent-identity registry: "later, crest code should allow for an approved address list defined in another contract, not integrated into the vault code itselt, the vault owner should be able to set where that check goes".
+
+This changes the design, not only the timing. Today each grant keeps its own allow list inside the vault: the `restricted` flag, the `allowed` mapping and `allow`. Under this design the list lives in a separate contract, and the vault asks the contract the principal chose. An identity-based list is then one such contract, written later.
+
+The proposal, with the reason for each part:
+1. **One list contract per grant, set with the grant's limits.**
+   - `Caps.list`, an address, replaces `Caps.restricted`. An address of 0 means any counterparty.
+   - **Why per grant:** limits and lists are per grant today, and different agents buy from different merchants. One list for the whole vault cannot say that.
+   - **Why inside `Caps`:** a grant and its list are then set in one transaction, so no new grant is ever briefly unrestricted.
+   - **Who sets it:** only authority above the grant, the principal included, through `grant` and `setCaps`. The change carries a note in `Granted` or `CapsSet`.
+   - An agent cannot change its own list's address, as it cannot widen its own limits.
+2. **The vault asks every level.**
+   - A payment asks the list of every grant on its path that names one, here and in every ancestor vault. Today's `checkPath` walk stays.
+   - So a child grant or a child vault pointing at a looser list still needs every list above it to say yes. It can never be looser than its parent's path.
+3. **The call is read-only, gas-capped and fails closed.**
+   - The vault calls `allows(vault, grant, counterparty)` with `staticcall` and a fixed gas cap: 30,000 gas is proposed, measured against the default list.
+   - Only one answer counts as a yes: exactly 32 bytes equal to the function's selector, as ERC-1271 returns a magic value.
+   - A checker that reverts, runs out of gas or returns anything else refuses the payment.
+   - It is read only in `charge` and `checkPath`, never after funding, so it cannot touch a deal already funded, and it never moves money.
+4. **A default list contract does what the vault's list does today.**
+   - `CrestAllowList`: one deployed contract with no owner, storing `(vault, grant, counterparty) → bool`.
+   - A write passes when the vault says the sender is above that grant (`vault.isAbove(sender, grant)`), the same rule as `allow` today. It emits `Allowed(vault, grant, counterparty, ok, by, note)`.
+   - The first version loses nothing, and the vault drops `allowed`, `allow` and the `Allowed` event.
+5. **Trust, stated plainly.** Whoever controls a list contract controls whom the grant can pay. A principal who points a grant at someone else's list trusts that party, and the owner's guide says so. The default list has no owner: only the vault's own authority writes a vault's entries.
+
+Attack tests that must fail:
+- an agent changing its own grant's list address;
+- a list that says yes to a counterparty its parent's list refuses, in the same vault and through a child vault;
+- a list that tries to re-enter the vault or write anything, which the `staticcall` refuses;
+- a list that reverts, loops past the gas cap, or returns `true` or garbage instead of the magic value;
+- a list whose answer changes between an off-chain simulation and the payment, where the answer at payment time decides;
+- a stranger writing a vault's entries in the default list.
+
+Gas: the pull request reports a payment's cost with the external check against today's in-vault check, at one level and at three.
+
+Scope: the default list contract and its interface are new files, so the outside review's file list grows by two when this is built.
+
+### 16. Three more answers (decided, 2026-11-19)
+
+- **A second approver above an amount:** "Later, when someone asks". Nothing to build.
+- **A trademark search for the name:** "go ahead and check". A first desk search is running and kept privately. A lawyer's opinion comes after it and is the maintainer's to ask for.
+- **Building order:** the vault as the buyer, the external list and the fee are built after the first stage of the two-model test (T-560), which keeps running on what is merged.
+
+### 17. Limits for a sub-agent by a signature alone (evaluated for the maintainer; not built)
+
+The maintainer: "Does this require code change for crest? Feels like something quite useful. Evaluate it, if it can be done we might as well do now". It needs a code change in the vault. Two shapes were compared.
+
+**(a) A signed grant that lands on chain at first use (recommended).**
+- **How it works.**
+  - The controller of a grant that may delegate signs an EIP-712 `Grant` off chain: the parent grant, the new key, its limits, a salt and a deadline.
+  - Anyone submits it with `grantBySig`: the sub-agent, an operator, or a batch with the first payment through Multicall3. The controller sends no transaction.
+  - The vault runs the same checks as `grant`, with the signer in place of the sender: authority over the parent, and a path that is open and may delegate. It then creates an ordinary grant, whose event names the signer as `by`.
+  - From then on it is a grant like any other.
+- **Replay.**
+  - The signed data is bound to one vault and one chain by the vault's EIP-712 domain: the name, version, chain ID and the vault's address.
+  - The grant's ID is `keccak256(parent, key, salt)`. Once created it stays taken, even after the grant closes, so the same signature never creates a second grant. No separate nonce is needed.
+  - The deadline ends the signature's use.
+  - The signer's key is checked by ECDSA, or by ERC-1271 if it is a contract.
+- **Revocation.**
+  - Before first use, three things stop it:
+    - the deadline passes;
+    - the signer loses its authority;
+    - its path is paused or closed, or may no longer delegate.
+  - An explicit cancel would need about 6 more lines: a closed record under the same ID. It is optional; short deadlines are recommended instead.
+  - After first use it is an ordinary grant: pause it, close it, or stop anything above it.
+- **A parent's stop.** Submitting checks the whole path at that moment, so a signed grant below a stopped parent cannot land. Once landed, the parent's stop stops it at every payment, as it stops any grant.
+- **Size.** About 30 new lines in `CrestVault.sol` and 12 in `ICrestVault.sol` [inferred]:
+  - `grantBySig`;
+  - the EIP-712 domain, from Solady's `EIP712`;
+  - one type hash;
+  - one shared internal grant path that `grant` also uses.
+
+  An outside review reads the new function, the domain, and the shared path.
+- **Gas.**
+  - The first payment costs one grant (126,160 gas at the median today [measured]) plus about 3,000 to 6,000 for the signature check and its calldata [inferred], plus today's funding (378,612 gas at the median through the module [measured, in-test execution without the 21,000 base]).
+  - Every later payment costs exactly today's funding.
+  - The build's pull request reports the measured numbers.
+
+**(b) A grant that never lands, checked from its signature chain at every payment (not recommended).**
+- **How it works.** Each payment carries the chain of signed grants from an on-chain grant down to the paying key, and the vault verifies every link every time.
+- **Counters.** The period, total and open limits need counters that persist between payments, so the vault must store them by the signed grant's hash. The grant then lands on chain anyway, as counters, without the rest of the model.
+- **Revocation.** It needs a new on-chain list of revoked hashes, because there is nothing on chain to close.
+- **Size and gas.** About 120 to 200 new lines [inferred]:
+  - link encoding;
+  - a verification loop;
+  - the counters by hash;
+  - the revocation list;
+  - a path walk that mixes on-chain and off-chain levels, across child vaults.
+
+  Every payment pays the signature checks and calldata of every link, again and again.
+- **Review.** It is a second model of the tree beside the first, so the outside review reads both, and every invariant must be proven twice.
+
+**Attack tests that must fail, for (a):**
+- a signature replayed after its grant closed;
+- a signature from another vault, another chain or another domain;
+- a signature after its deadline;
+- a signer without authority over the parent;
+- a signer whose path is paused, closed, expired or may not delegate;
+- a signer that lost its authority between signing and submission;
+- limits, key, parent or salt changed after signing;
+- a key that holds a grant elsewhere, when the signer is not above that grant;
+- a malleable signature, which yields the same ID and is refused as a replay.
+
+**Recommendation:** build (a) in the next build, with the vault as the buyer, the fee and the external list, after the first stage of the two-model test (T-560).
+
 ## Open, for the maintainer
 
-1. **The vault as the buyer,** so the principal can step in on a funded deal: it needs Holdback's operators to read a contract buyer (Holdback T-227) and narrows Holdback's ADR-0038 rule that a revocation never touches a funded deal.
-2. **Gas:** the operators relaying a vault's funding, so agents need no ETH, and Crow paying to create vaults on request (a new request field or route).
-3. **The fee:** none now is recommended, with no fee code in any contract.
-4. **Grants by signature alone,** so a sub-agent costs no transaction.
-5. **A second approver above a threshold,** carried in the funding's signature field.
-6. **Depending on third-party code a single address can pause, or under copyleft or source-available licences:** none in the first version.
-7. **A trademark search for the name** before any public use.
-8. **Deploys to Sepolia,** on the maintainer's word.
+1. **The fee's design** (section 14): fixed at deployment in the vault implementation, taken only on a payment, rounded down, never on the hold. To accept or change before it is built.
+2. **The external merchant list's design** (section 15): one list contract per grant, set with the limits, asked read-only and gas-capped at every level. To accept or change before it is built.
+3. **Grants by signature** (section 17): shape (a) is recommended for the next build.
+4. **Holdback's side of the vault as the buyer** (section 12):
+    - the maintainer's yes on Holdback's record (D84), so T-549's schema v0.12 carries the buyer's longer signature;
+    - his acceptance that a vault buyer narrows ADR-0038 point 4.
+5. **The name:** the first desk search found the name crowded in crypto and finance, with a close use in the same field. Until the maintainer decides, it spreads no further: no site page, package name, domain or announcement.
+6. **Crow paying to create vaults on request:** a new request field or route; the relay of fundings is decided (section 13).
+7. **Depending on third-party code a single address can pause, or under copyleft or source-available licences:** none in the first version.
+8. **Deploys to Sepolia,** on the maintainer's word. They follow Holdback's redeploy of its rules contract (T-563), since the module is per rules deployment, and a bump of `lib/holdback` to the new record.
 9. **Identity notes:** whether to fix a format for identity in a note now (for example a CAIP-19 identifier for an ERC-8004 agent) or when a principal asks.
-10. **An identity-following merchant list:** whether an opt-in module may ever approve merchants by agent identity, given that one outside key controls the registries.
-11. **Controller keys:** guidance on a long-lived public key per agent against a fresh key per deal or session.
-12. **A longer period after spend on several days:** the vault keeps one window's counter, so lengthening a daily limit to a weekly one counts only the last day paid in. After 3 holds on each of two days, a weekly limit of 6 lets 3 more through: 9 in the week (`test_observe_lengthenThePeriodAfterTwoDaysOfSpend_countsOnlyTheLastDay`). There are two ways to close it:
+10. **Controller keys:** guidance on a long-lived public key per agent against a fresh key per deal or session.
+11. **A longer period after spend on several days:** the vault keeps one window's counter, so lengthening a daily limit to a weekly one counts only the last day paid in. After 3 holds on each of two days, a weekly limit of 6 lets 3 more through: 9 in the week (`test_observe_lengthenThePeriodAfterTwoDaysOfSpend_countsOnlyTheLastDay`). There are two ways to close it:
     - document it: set a lower limit for the rest of the week, or pause first;
     - carry conservatively: count the whole lifetime spend since the new window began, which needs a history the vault does not keep.
 
