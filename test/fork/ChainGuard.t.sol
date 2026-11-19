@@ -10,7 +10,7 @@ import {HoldbackModule} from "../../src/modules/holdback/HoldbackModule.sol";
 
 /// Which chain the deploy script deploys to. Forge simulates a script with `block.chainid` 31337 from foundry.toml
 /// whatever the RPC, and signs for the chain the RPC answers, so the script asks the RPC. Each suite runs only when
-/// its RPC variable is set; skipped otherwise, as in CI.
+/// its RPC variable is set; skipped otherwise, as in CI. No suite sets an environment variable another one reads.
 abstract contract ChainGuardBase is Test {
     function _forkOrSkip(string memory variable) internal {
         string memory url = vm.envOr(variable, string(""));
@@ -23,7 +23,8 @@ abstract contract ChainGuardBase is Test {
     }
 }
 
-/// `CREST_FORK_URL`: a fork of Sepolia. The script runs as forge runs it and records Sepolia.
+/// `CREST_FORK_URL`: a fork of Sepolia. The script runs as forge runs it: `run` deploys against the rules contract in
+/// Holdback's pinned record, a rerun deploys nothing, and `verify` records Sepolia and the CREATE2 addresses.
 contract DeployOnSepoliaTest is ChainGuardBase {
     HoldbackRules internal constant RULES = HoldbackRules(0x3BE45128565ABBc35DbD4660716b703Ff489f1b4);
 
@@ -31,11 +32,15 @@ contract DeployOnSepoliaTest is ChainGuardBase {
         _forkOrSkip("CREST_FORK_URL");
     }
 
-    function test_onSepolia_runReadsTheChainFromTheRpc_andRecordsIt() public {
+    function test_onSepolia_runDeploys_rerunIsANoop_andVerifyRecordsIt() public {
         string memory path = "deployments/rehearsal-11155111.json";
-        vm.setEnv("HOLDBACK_RULES", vm.toString(address(RULES)));
         vm.setEnv("CREST_RECORD", path);
-        (CrestFactory f, HoldbackModule m) = new Deploy().run();
+        Deploy script = new Deploy();
+        (CrestFactory f, HoldbackModule m) = script.run();
+        (CrestFactory f2, HoldbackModule m2) = script.run();
+        assertEq(address(f2), address(f));
+        assertEq(address(m2), address(m));
+        script.verify();
         string memory json = vm.readFile(path);
         assertEq(vm.parseJsonUint(json, ".chainId"), 11_155_111);
         assertEq(vm.parseJsonAddress(json, ".rules"), address(RULES));
@@ -50,17 +55,20 @@ contract DeployOnSepoliaTest is ChainGuardBase {
     }
 }
 
-/// `CREST_CHAIN1_URL`: an RPC that answers chain ID 1, as mainnet does (`anvil --chain-id 1` stands in). The script
-/// refuses before anything is sent.
+/// `CREST_CHAIN1_URL`: an RPC that answers chain ID 1, as mainnet does (`anvil --chain-id 1` stands in). Every public
+/// path refuses before anything is sent, a direct `deploy` with Sepolia's rules contract included.
 contract DeployOnChainOneTest is ChainGuardBase {
     function setUp() public {
         _forkOrSkip("CREST_CHAIN1_URL");
     }
 
-    function test_attack_runAgainstChainOne_refused() public {
+    function test_attack_everyPathAgainstChainOne_refused() public {
         Deploy script = new Deploy();
-        vm.setEnv("HOLDBACK_RULES", vm.toString(address(script)));
         vm.expectRevert(abi.encodeWithSelector(Deploy.NotATestNetwork.selector, 1));
         script.run();
+        vm.expectRevert(abi.encodeWithSelector(Deploy.NotATestNetwork.selector, 1));
+        script.deploy(HoldbackRules(0x3BE45128565ABBc35DbD4660716b703Ff489f1b4));
+        vm.expectRevert(abi.encodeWithSelector(Deploy.NotATestNetwork.selector, 1));
+        script.verify();
     }
 }

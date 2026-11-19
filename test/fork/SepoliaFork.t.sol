@@ -39,8 +39,7 @@ contract SepoliaForkTest is CrestBase {
         rules = SEPOLIA_RULES;
         escrow = AuthCaptureEscrow(rules.ESCROW());
         usdc = MockERC3009Token(SEPOLIA_TOKEN);
-        Deploy script = new Deploy();
-        (factory, module) = script.deploy(rules, script.rpcChainId());
+        (factory, module) = new Deploy().deploy(rules);
         vault = CrestVault(factory.create(principal, address(usdc), bytes32("sepolia fork")));
         vm.startPrank(principal);
         vault.setModule(address(module), module.payee(), "");

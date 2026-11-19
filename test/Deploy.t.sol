@@ -11,19 +11,46 @@ import {CrestVault} from "../src/CrestVault.sol";
 import {HoldbackModule} from "../src/modules/holdback/HoldbackModule.sol";
 import {CrestBase} from "./CrestBase.sol";
 
-/// The deploy script on Holdback's test world: it deploys, checks itself, refuses a mainnet chain, and what it deploys
-/// pays a deal.
+/// The deploy script with the RPC's answer, the local rules contract and the record's path set by the test, so no
+/// test here reads an RPC or an environment variable another suite sets.
+contract DeployHarness is Deploy {
+    uint256 public chain = 31_337;
+    HoldbackRules public localRules;
+
+    function set(uint256 chain_, HoldbackRules localRules_) external {
+        (chain, localRules) = (chain_, localRules_);
+    }
+
+    function rpcChainId() public view override returns (uint256) {
+        return chain;
+    }
+
+    function rulesFor(uint256 chainId) public view override returns (HoldbackRules) {
+        return chainId == 11_155_111 ? super.rulesFor(chainId) : localRules;
+    }
+
+    function recordPath(uint256) public pure override returns (string memory) {
+        return "deployments/rehearsal-harness.json";
+    }
+}
+
+/// The deploy script on Holdback's test world: it deploys at the CREATE2 addresses its code gives, checks itself,
+/// completes a partial deploy on a rerun, records only what is on chain, refuses every chain but Sepolia and a local
+/// one on every public path, and what it deploys pays a deal.
 contract DeployTest is CrestBase {
-    Deploy internal script;
+    DeployHarness internal script;
 
     function setUp() public override {
         super.setUp();
-        script = new Deploy();
+        script = new DeployHarness();
+        script.set(31_337, rules);
     }
 
     function test_theScriptDeploysAndChecks_andAVaultFromItPaysADeal() public {
-        (CrestFactory f, HoldbackModule m) = script.deploy(rules, 31_337);
-        script.check(f, m, rules);
+        (CrestFactory f, HoldbackModule m) = script.run();
+        (CrestFactory pf, HoldbackModule pm) = script.addresses(rules);
+        assertEq(address(f), address(pf));
+        assertEq(address(m), address(pm));
         CrestVault v = CrestVault(f.create(principal, address(usdc), bytes32("deployed")));
         vm.startPrank(principal);
         v.setModule(address(m), m.payee(), "the deployed module");
@@ -42,20 +69,57 @@ contract DeployTest is CrestBase {
         assertEq(uint8(_stage(id)), uint8(IHoldbackRules.Stage.Held));
     }
 
-    /// With no RPC the script cannot learn the chain, so it deploys nothing.
-    function test_attack_runWithoutAnRpc_refused() public {
-        vm.setEnv("HOLDBACK_RULES", vm.toString(address(rules)));
-        vm.expectRevert();
-        script.run();
+    function test_aRerunDeploysNothingAgain_andReturnsTheSameContracts() public {
+        (CrestFactory f, HoldbackModule m) = script.run();
+        (CrestFactory f2, HoldbackModule m2) = script.run();
+        assertEq(address(f2), address(f));
+        assertEq(address(m2), address(m));
     }
 
-    function test_attack_deployOnMainnet_refused() public {
+    function test_verify_refusesBeforeTheDeploy_andRecordsAfterIt() public {
+        vm.expectRevert(abi.encodeWithSelector(Deploy.CheckFailed.selector, "no factory at its address"));
+        script.verify();
+        (CrestFactory f, HoldbackModule m) = script.run();
+        script.verify();
+        string memory path = script.recordPath(31_337);
+        string memory json = vm.readFile(path);
+        assertEq(vm.parseJsonUint(json, ".chainId"), 31_337);
+        assertEq(vm.parseJsonAddress(json, ".rules"), address(rules));
+        assertEq(vm.parseJsonAddress(json, ".factory"), address(f));
+        assertEq(vm.parseJsonAddress(json, ".implementation"), f.IMPLEMENTATION());
+        assertEq(vm.parseJsonAddress(json, ".holdbackModule"), address(m));
+        vm.removeFile(path);
+    }
+
+    /// With no RPC the script cannot learn the chain, so neither public path deploys.
+    function test_attack_withoutAnRpc_refused() public {
+        Deploy real = new Deploy();
+        vm.expectRevert();
+        real.run();
+        vm.expectRevert();
+        real.deploy(rules);
+    }
+
+    function test_attack_onMainnet_everyPathRefused() public {
+        script.set(1, rules);
         vm.expectRevert(abi.encodeWithSelector(Deploy.NotATestNetwork.selector, 1));
-        script.deploy(rules, 1);
+        script.run();
+        vm.expectRevert(abi.encodeWithSelector(Deploy.NotATestNetwork.selector, 1));
+        script.deploy(rules);
+        vm.expectRevert(abi.encodeWithSelector(Deploy.NotATestNetwork.selector, 1));
+        script.verify();
+    }
+
+    function test_attack_onSepolia_aRulesContractOutsideHoldbacksRecord_refused() public {
+        script.set(11_155_111, rules);
+        vm.expectRevert(
+            abi.encodeWithSelector(Deploy.CheckFailed.selector, "not the rules contract in Holdback's Sepolia record")
+        );
+        script.deploy(rules);
     }
 
     function test_attack_deployAgainstAnAddressWithNoCode_refused() public {
         vm.expectRevert(abi.encodeWithSelector(Deploy.CheckFailed.selector, "no rules contract at HOLDBACK_RULES"));
-        script.deploy(HoldbackRules(makeAddr("not a rules contract")), 31_337);
+        script.deploy(HoldbackRules(makeAddr("not a rules contract")));
     }
 }
