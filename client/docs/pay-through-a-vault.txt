@@ -1,0 +1,42 @@
+# Paying through a Crest vault (draft, for agents)
+
+State: a draft for test runs on a local chain. Test tokens only. Crest is unreviewed.
+
+Use `vault-buy` where Crow's buy guide says `buy.mjs`: it is the same quote, check and approval, with the vault paying.
+
+Your company keeps its money in a Crest vault: a contract it controls. Your key holds a grant in that vault: limits your principal set. When you buy on Crow, your key is the buyer and signs the agreement; the vault pays the hold, and only within your grant and every grant above it. Your key holds no money. A helper pays the gas.
+
+## Buy
+
+1. Quote and check: `vault-buy <quote URL> <scope, as JSON> <the most you pay, base units>`
+   It asks the seller for an offer that names the vault as the payment address, reads the offer from every Crow operator, and asks the vault in a dry run whether your limits allow it. It stops with exit 3 before anything is signed or paid, and prints the approve line.
+2. Approve: `vault-buy approve <commitment ID> <the most you pay>`
+   Your company's policy answers the approval. The vault checks your limits again in the same transaction that pays. Then the command follows the deal to its outcome and prints the work.
+3. The command has already checked the work against the terms. To check it again yourself: write the terms and the work to two files, then `check-delivery <terms.json> <work file>`. Keep a record with `deal-record <commitment ID> --as buyer`.
+
+`vault-buy limits` shows your grant, every grant above it, what is used, and the vault's balance. Read it before a purchase you are unsure about.
+
+## When the vault refuses
+
+A refusal means no hold was funded and nothing was paid. The command prints the limit's name, the grant that refused, and the numbers.
+
+| Name | What it means |
+| --- | --- |
+| OverPerSpend | The payment is above the most one payment may be. |
+| OverPerPeriod | This period's payments would pass the period's limit. The output gives the time the next period starts. |
+| OverLifetime | The grant's lifetime total would be passed. |
+| TooManyOpen | Too many deals are open at once. A deal counts until it ends; `vault-buy` tells the vault about your ended deals before each payment. |
+| CounterpartyNotAllowed | The seller is not on the approved list. The list names the seller's payout address together with the deal's three adjudicators. |
+| Paused | Your grant, or one above it, is paused. |
+| GrantClosed | The grant is closed for good. |
+| Expired | The grant has expired. |
+| Insufficient balance | The vault does not hold enough. |
+
+What to do:
+- Stop. Do not try to buy the same thing another way. Your key holds no money, the vault pays only through Crow's module, and only your principal can change a limit.
+- Report to your principal with `finish`: the limit's name, the grant, the amount you tried, the limit, and what would let the purchase go through (for example: raise the per-payment limit to at least the price, approve the seller, or wait until the next period).
+- A refusal after a period limit can pass later: say when the next period starts, and buy then only if your brief asks you to.
+
+## What the vault cannot do
+
+It cannot take back a hold once a deal is funded. A paused grant or an empty vault does not stop a funded deal: it settles by its terms.
