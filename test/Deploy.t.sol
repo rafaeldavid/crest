@@ -22,7 +22,7 @@ contract DeployTest is CrestBase {
     }
 
     function test_theScriptDeploysAndChecks_andAVaultFromItPaysADeal() public {
-        (CrestFactory f, HoldbackModule m) = script.deploy(rules);
+        (CrestFactory f, HoldbackModule m) = script.deploy(rules, 31_337);
         script.check(f, m, rules);
         CrestVault v = CrestVault(f.create(principal, address(usdc), bytes32("deployed")));
         vm.startPrank(principal);
@@ -42,28 +42,20 @@ contract DeployTest is CrestBase {
         assertEq(uint8(_stage(id)), uint8(IHoldbackRules.Stage.Held));
     }
 
-    function test_run_writesTheRecord() public {
-        string memory path = "deployments/rehearsal-31337.json";
+    /// With no RPC the script cannot learn the chain, so it deploys nothing.
+    function test_attack_runWithoutAnRpc_refused() public {
         vm.setEnv("HOLDBACK_RULES", vm.toString(address(rules)));
-        vm.setEnv("CREST_RECORD", path);
-        (CrestFactory f, HoldbackModule m) = script.run();
-        string memory json = vm.readFile(path);
-        assertEq(vm.parseJsonUint(json, ".chainId"), 31_337);
-        assertEq(vm.parseJsonAddress(json, ".rules"), address(rules));
-        assertEq(vm.parseJsonAddress(json, ".factory"), address(f));
-        assertEq(vm.parseJsonAddress(json, ".implementation"), f.IMPLEMENTATION());
-        assertEq(vm.parseJsonAddress(json, ".holdbackModule"), address(m));
-        vm.removeFile(path);
+        vm.expectRevert();
+        script.run();
     }
 
     function test_attack_deployOnMainnet_refused() public {
-        vm.chainId(1);
         vm.expectRevert(abi.encodeWithSelector(Deploy.NotATestNetwork.selector, 1));
-        script.deploy(rules);
+        script.deploy(rules, 1);
     }
 
     function test_attack_deployAgainstAnAddressWithNoCode_refused() public {
         vm.expectRevert(abi.encodeWithSelector(Deploy.CheckFailed.selector, "no rules contract at HOLDBACK_RULES"));
-        script.deploy(HoldbackRules(makeAddr("not a rules contract")));
+        script.deploy(HoldbackRules(makeAddr("not a rules contract")), 31_337);
     }
 }

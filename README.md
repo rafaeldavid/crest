@@ -12,10 +12,11 @@ Crest knows how to pay; it knows nothing of what it pays for. A module per venue
 - `docs/research/`: the research behind it.
 - `src/`: the vault, its factory and the Holdback module, with descriptions in their interface files.
 - `test/`: the tests, attack tests included: each limit is proven by an attempt to break it that fails.
-- `script/Deploy.s.sol`: deploys the factory and the Holdback module on Sepolia or a local chain, and refuses any other chain. It checks what it deployed and writes `deployments/<chain id>.json`. Deploys wait for the maintainer.
+- `script/Deploy.s.sol`: deploys the factory and the Holdback module on Sepolia or a local chain, and refuses any other chain. It asks the RPC which chain it is on, checks what it deployed and writes `deployments/<chain id>.json`. Deploys wait for the maintainer.
 
 ```sh
 git submodule update --init --recursive
 forge test
-CREST_FORK_URL=<sepolia-rpc-url> forge test --match-contract SepoliaForkTest   # the deploy rehearsal on a fork
+CREST_FORK_URL=<sepolia-fork-rpc-url> forge test --match-path 'test/fork/*'   # the deploy rehearsal on a fork of Sepolia
+CREST_CHAIN1_URL=<rpc-url-of-anvil---chain-id-1> forge test --match-contract DeployOnChainOneTest   # the mainnet refusal
 ```
