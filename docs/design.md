@@ -300,9 +300,17 @@ It changes the third: the fixed recipient is a sweeper contract that collects. W
 - **At a rate of 0.** No fee is ever owed. A payment's extra cost is the comparison of one immutable, measured in the pull request.
 - **The destination.** Rafa decides it when a fee is switched on, as a wallet that needs two of three keys. For the rate-0 factory on the test network, the sweeper stand-in is the session deployer's address, `0xa27Cd8A0cF6D15559aF9E6Ff9ebd885da57C3E6a`: no fee accrues, so nothing is ever sent there. The deploy script refuses a non-zero rate unless the sweeper is a contract. A factory with a real rate needs the maintainer's choice of destination first.
 
+- **One approval at a time, with a fee.** With a fee on, the vault refuses a second payment approval in one transaction until the token has spent the first (`ApprovalPending`). So every balance check sees every earlier pull, and two commitments can never share one authorization. Crest's Holdback module charges and pulls in one call, so it never meets this.
+- **Smaller points.**
+  - An amount too large to carry its fee is refused by name (`OverPerSpend`).
+  - `collectFee` with nothing owed returns without an event.
+  - The sweeper's `Swept` records only what that sweep collected.
+  - The deploy script refuses a fee whose sweeper names no destination.
+- **Out of scope: the token's own honesty.** A token whose `balanceOf` lies can let a withdrawal take the fee owed, and no vault check can catch it. The principal chooses the token.
+- **Review and red team.** The red team tried 30 attacks and found no Medium or High. No attack moved money outside the terms, shrank a hold or passed a limit through the fee. Its 3 Low and 4 Info findings are fixed with its tests, except the lying token above.
 - **Measured (2026-11-19).**
-  - **Gas.** A funding through the module costs 428,459 execution gas before the fee code and 429,148 with it at a rate of 0: 689 gas more, or 0.16%.
-  - **Lines.** `CrestVault.sol` went from 481 to 514, `CrestFactory.sol` from 60 to 62, and `ICrestVault.sol` from 307 to 325. The six contract files went from 1,046 to 1,099. `CrestFeeSweeper.sol` (27 lines) and `ICrestFeeSweeper.sol` (22) are new, so the eight files hold 1,148.
+  - **Gas.** A funding through the module costs 428,459 execution gas before the fee code and 429,250 with it at a rate of 0: 791 gas more, or 0.18%.
+  - **Lines.** `CrestVault.sol` went from 481 to 539, `CrestFactory.sol` from 60 to 62, and `ICrestVault.sol` from 307 to 326. The six contract files went from 1,046 to 1,125. `CrestFeeSweeper.sol` (28 lines) and `ICrestFeeSweeper.sol` (22) are new, so the eight files hold 1,175.
 
 Every fee line is in the outside review's scope: the maintainer set it to all six contract files, in deep mode, and the sweeper and its interface add two files.
 
@@ -443,7 +451,10 @@ What was built (`grantBySig`, `cancelSignedGrant`, `SignedGrant`):
 
 ## Open, for the maintainer
 
-1. **The fee** (section 14): decided and built. The sweeper's destination is decided when a fee is switched on.
+1. **The fee** (section 14): decided and built. The sweeper's destination is decided when a fee is switched on. Three questions from the red team, each recommended as built:
+    - **A refunded or reclaimed hold keeps its fee owed.** Recommended: keep it. A refund of the fee needs per-commitment fee records, and the rate is 0 now.
+    - **The fee is owed only on payments through a module.** A withdrawal owes none, and a payment too small for the rate to reach 1 base unit owes 0. Recommended: keep it.
+    - **`collectFee` pays all that is owed or nothing.** The vault's checks keep the balance at or above what it owes. Recommended: keep it.
 2. **The external merchant list's design** (section 15): one list contract per grant, set with the limits, asked read-only and gas-capped at every level. To accept or change before it is built.
 3. **Grants by signature** (section 17): decided and built, shape (a).
 4. **Holdback's side of the vault as the buyer** (section 12):

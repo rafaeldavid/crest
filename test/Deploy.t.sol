@@ -35,6 +35,11 @@ contract DeployHarness is Deploy {
     function recordPath(uint256) public pure override returns (string memory) {
         return "deployments/rehearsal-harness.json";
     }
+
+    /// A rate of 0 with no sweeper, whatever the shell's `CREST_FEE_*` say.
+    function feeOf() public pure override returns (uint256, address) {
+        return (0, address(0));
+    }
 }
 
 /// The deploy script on Holdback's test world: it deploys at the CREATE2 addresses its code gives, checks itself,

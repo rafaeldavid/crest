@@ -19,9 +19,10 @@ contract CrestFeeSweeper is ICrestFeeSweeper {
     /// @inheritdoc ICrestFeeSweeper
     function sweep(ICrestVault vault) external returns (uint256 amount) {
         address token = vault.token();
+        uint256 before = SafeTransferLib.balanceOf(token, address(this));
         vault.collectFee();
         amount = SafeTransferLib.balanceOf(token, address(this));
-        emit Swept(address(vault), token, amount, msg.sender);
+        emit Swept(address(vault), token, amount > before ? amount - before : 0, msg.sender);
         if (amount != 0) SafeTransferLib.safeTransfer(token, DESTINATION, amount);
     }
 }

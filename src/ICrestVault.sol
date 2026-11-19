@@ -170,6 +170,7 @@ interface ICrestVault {
     error KeyNotFresh();
     error InvalidFee();
     error BalanceBelowFee();
+    error ApprovalPending();
     error SignedGrantExpired();
 
     // Setup
