@@ -86,7 +86,13 @@ A second venue is a second module; the vault does not change.
 
 No owner, controller, module or factory can stop a funded deal from settling by its terms or move a hold. Before funding, a limit or a stop only declines to pay, as any buyer may. After funding, the owner can stop its agent and take back everything not in a hold, and Holdback's own timeouts return every hold. A Crest vault is the owner's own wallet, not a settlement contract: its owner has over it what any key has over its own balance.
 
-### 8. What the tests must show failing
+### 8. Measured on the first build
+
+- `forge test` on Holdback's own test world and its unchanged rules contract: every control's attack refused by name, the owner emptying the vault after a funding while the deal still ends Released, and the escrow's `reclaim` after expiry returning the hold to the vault [measured, 2026-11-19].
+- On a local chain with Holdback's operator code, a funding sent from a Crest vault through the Holdback module was followed with no change to the operators, and the deal ended Released; a funding over the per-deal limit reverted [measured, 2026-11-19, at this repository's commit `e532074`].
+- A funding through a vault one level below the root costs 390,634 gas, against 297,568 from a plain key, measured in the same forge test [measured].
+
+### 9. What the tests must show failing
 
 For each control, an attempt to break it that fails: a payment over each limit at the grant and at each ancestor; a wider child; siblings that together pass their parent; an unlisted counterparty at any level; after a stop at any level; an expired grant; a controller widening or resuming itself; a stranger or an agent withdrawing, enabling a module or granting; a module not enabled; a payee other than the pinned one; a commitment opened or released twice; a failed venue call after a charge (nothing counted); the approval used twice or asked by a caller that is not the token; the period boundary; a child vault paying past its parent's stop, expiry, per-payment limit or list; a child sending money anywhere but up; a Holdback funding sent straight to the rules contract for a vault-paid deal; and the owner emptying the vault after a funding while the deal still settles.
 
@@ -100,4 +106,5 @@ For each control, an attempt to break it that fails: a payment over each limit a
 6. **Depending on third-party code a single address can pause, or under copyleft or source-available licences:** none in the first version.
 7. **A trademark search for the name** before any public use.
 8. **Deploys to Sepolia,** on the owner's word.
-9. **GitHub Pro or a public repository,** for secret scanning with push protection and a rule that requires a pull request and both checks on `main`. GitHub Free offers neither on a private repository [measured, 2026-11-19: HTTP 422 and 403].
+
+The repository's visibility is settled: public since 2026-11-19, with secret scanning, push protection, private vulnerability reporting, and a rule on `main` that takes changes only by pull request with both checks passing.
