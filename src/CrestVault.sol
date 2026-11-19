@@ -126,7 +126,7 @@ contract CrestVault is ICrestVault, EIP712 {
     /// @inheritdoc ICrestVault
     function grantBySig(SignedGrant calldata signed, bytes calldata signature) external returns (uint256 id) {
         if (block.timestamp > signed.deadline) revert SignedGrantExpired();
-        if (signature.length != 65 || uint256(bytes32(signature[32:64])) > HALF_N) revert BadSignature();
+        if (signature.length != 65 || uint256(bytes32(signature[32:64])) > HALF_N) revert BadGrantSignature();
         bytes32 structHash = keccak256(
             abi.encode(
                 SIGNED_GRANT_TYPEHASH,
@@ -140,7 +140,8 @@ contract CrestVault is ICrestVault, EIP712 {
             )
         );
         address signer = ECDSA.tryRecoverCalldata(_hashTypedData(structHash), signature);
-        if (signer == address(0)) revert BadSignature();
+        if (signer == address(0)) revert BadGrantSignature();
+        if (grantOf[signed.controller] != 0) revert GrantExists();
         id = _grant(signer, signed.parent, signed.controller, signed.caps, signed.salt, signed.note);
         for (uint256 i; i < signed.counterparties.length; ++i) {
             allowed[id][signed.counterparties[i]] = true;
@@ -150,6 +151,7 @@ contract CrestVault is ICrestVault, EIP712 {
 
     /// @inheritdoc ICrestVault
     function cancelSignedGrant(uint256 parentId, address controller, bytes32 salt, bytes calldata note) external {
+        _requireExists(parentId);
         if (!authorityOver(msg.sender, parentId)) revert NotAuthorized();
         if (controller == address(0)) revert ZeroAddress();
         uint256 id = uint256(keccak256(abi.encode(parentId, controller, salt)));

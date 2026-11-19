@@ -157,7 +157,7 @@ interface ICrestVault {
     error OverLifetime(uint256 grant);
     error TooManyOpen(uint256 grant);
     error CounterpartyNotAllowed(uint256 grant);
-    error BadSignature();
+    error BadGrantSignature();
     error SignedGrantExpired();
 
     // Setup
@@ -195,13 +195,14 @@ interface ICrestVault {
         returns (uint256 id);
 
     /// @notice Lands `signed` as `grant` would for its signer, and lists its counterparties, by anyone until its
-    ///         deadline. `signature` is a 65-byte ECDSA signature with a low `s`: a contract controller grants by
-    ///         transaction.
+    ///         deadline, for a key that holds no grant here: moving a key takes a transaction. `signature` is a
+    ///         65-byte ECDSA signature with a low `s`: a contract controller grants by transaction.
     /// @return id The new grant's ID.
     function grantBySig(SignedGrant calldata signed, bytes calldata signature) external returns (uint256 id);
 
-    /// @notice Voids an unused signed grant by taking its ID, which then holds a closed grant. By anyone with authority
-    ///         over `parentId`.
+    /// @notice Voids an unused signed grant by taking its ID, which then holds a closed grant, emitting `Closed` with no
+    ///         `Granted` before it. By anyone with authority over the existing grant `parentId`, even while paused or
+    ///         unable to delegate, so a signer can always void its own slips; another salt avoids an ID it takes.
     function cancelSignedGrant(uint256 parentId, address controller, bytes32 salt, bytes calldata note) external;
 
     /// @notice Sets the limits of grant `id`. By anyone with authority above it.

@@ -127,7 +127,7 @@ contract SignedGrantTest is CrestBase {
         bytes memory sellerSig = _sellerSig(t, SELLER_PK);
         H.Acceptance memory a = _acceptance(t, ADJ_PK);
         H.Agree memory forged = _agree(t, STRANGER_PK);
-        vm.expectRevert();
+        vm.expectRevert(IHoldbackRules.BadSignature.selector);
         module.agreeAndFund(t, sellerSig, a, forged, H.Funding({signature: new bytes(65)}));
         assertEq(_grantOf(vault, _idOf(s)).spent, 0);
     }
@@ -328,10 +328,10 @@ contract SignedGrantTest is CrestBase {
         ICrestVault.SignedGrant memory s = _slip();
         (uint8 v, bytes32 r, bytes32 ss) = vm.sign(BUYER_PK, _digest(vault, s));
         bytes memory twin = abi.encodePacked(r, bytes32(N - uint256(ss)), v == 27 ? uint8(28) : uint8(27));
-        vm.expectRevert(ICrestVault.BadSignature.selector);
+        vm.expectRevert(ICrestVault.BadGrantSignature.selector);
         vault.grantBySig(s, twin);
         vault.grantBySig(s, abi.encodePacked(r, ss, v));
-        vm.expectRevert(ICrestVault.BadSignature.selector);
+        vm.expectRevert(ICrestVault.BadGrantSignature.selector);
         vault.grantBySig(s, twin);
     }
 
@@ -339,11 +339,11 @@ contract SignedGrantTest is CrestBase {
         ICrestVault.SignedGrant memory s = _slip();
         (uint8 v, bytes32 r, bytes32 ss) = vm.sign(BUYER_PK, _digest(vault, s));
         bytes32 vs = bytes32(uint256(ss) | (uint256(v - 27) << 255));
-        vm.expectRevert(ICrestVault.BadSignature.selector);
+        vm.expectRevert(ICrestVault.BadGrantSignature.selector);
         vault.grantBySig(s, abi.encodePacked(r, vs));
-        vm.expectRevert(ICrestVault.BadSignature.selector);
+        vm.expectRevert(ICrestVault.BadGrantSignature.selector);
         vault.grantBySig(s, abi.encodePacked(r, ss, v, uint8(0)));
-        vm.expectRevert(ICrestVault.BadSignature.selector);
+        vm.expectRevert(ICrestVault.BadGrantSignature.selector);
         vault.grantBySig(s, "");
     }
 
@@ -369,6 +369,178 @@ contract SignedGrantTest is CrestBase {
         assertEq(version, "1");
         assertEq(chainId, block.chainid);
         assertEq(verifyingContract, address(vault));
+    }
+
+    // From the review of PR 7
+
+    /// An older slip never replaces the key's later grant: a slip lands only for a key that holds no grant here.
+    function test_attack_aSlipForAKeyThatHoldsAGrant_refused() public {
+        ICrestVault.SignedGrant memory a = _slip();
+        a.caps = _caps(HOLD, 3 * HOLD, type(uint128).max, 2, true, false);
+        bytes memory sigA = _signed(BUYER_PK, vault, a);
+        vm.prank(buyer);
+        uint256 narrow = vault.grant(agentGrant, sub, _caps(HOLD, HOLD, HOLD, 1, true, false), bytes32("narrow"), "");
+        vm.prank(stranger);
+        vm.expectRevert(ICrestVault.GrantExists.selector);
+        vault.grantBySig(a, sigA);
+        assertFalse(_grantOf(vault, narrow).closed, "the later grant stays");
+        assertEq(vault.grantOf(sub), narrow);
+    }
+
+    /// Two slips for one key: the second lands only once the first grant has closed and freed the key, as a grant by
+    /// transaction could. A stop meant for everything below the agent goes on the agent's own grant.
+    function test_observe_aSecondSlipForOneKey_landsOnlyAfterTheFirstGrantCloses() public {
+        ICrestVault.SignedGrant memory a = _slip();
+        ICrestVault.SignedGrant memory b = _slip();
+        b.salt = bytes32("second task");
+        bytes memory sigA = _signed(BUYER_PK, vault, a);
+        bytes memory sigB = _signed(BUYER_PK, vault, b);
+        vault.grantBySig(a, sigA);
+        vm.expectRevert(ICrestVault.GrantExists.selector);
+        vault.grantBySig(b, sigB);
+        vm.prank(principal);
+        vault.close(_idOf(a), "");
+        vault.grantBySig(b, sigB);
+        assertEq(vault.grantOf(sub), _idOf(b));
+    }
+
+    function test_aSlipAtItsDeadline_lands() public {
+        ICrestVault.SignedGrant memory s = _slip();
+        bytes memory sig = _signed(BUYER_PK, vault, s);
+        vm.warp(s.deadline);
+        vault.grantBySig(s, sig);
+    }
+
+    function test_attack_aSignatureWithAnInvalidV_refused() public {
+        ICrestVault.SignedGrant memory s = _slip();
+        (, bytes32 r, bytes32 ss) = vm.sign(BUYER_PK, _digest(vault, s));
+        vm.expectRevert(ICrestVault.BadGrantSignature.selector);
+        vault.grantBySig(s, abi.encodePacked(r, ss, uint8(0)));
+    }
+
+    function test_attack_anExpiredSignersSlip_refused() public {
+        ICrestVault.Caps memory c = _caps(HOLD, 3 * HOLD, type(uint128).max, 2, true, true);
+        c.expiresAt = uint40(vm.getBlockTimestamp());
+        _setAgentCaps(c);
+        ICrestVault.SignedGrant memory s = _slip();
+        vm.expectRevert(abi.encodeWithSelector(ICrestVault.Expired.selector, agentGrant));
+        vault.grantBySig(s, _signed(BUYER_PK, vault, s));
+    }
+
+    /// The top principal's exemption from the delegation walk follows the signer, not the submitter.
+    function test_attack_thePrincipalSubmitsAnAgentsSlip_noExemption() public {
+        _setAgentCaps(_caps(HOLD, 3 * HOLD, type(uint128).max, 2, true, false));
+        ICrestVault.SignedGrant memory s = _slip();
+        bytes memory sig = _signed(BUYER_PK, vault, s);
+        vm.prank(principal);
+        vm.expectRevert(ICrestVault.MayNotDelegate.selector);
+        vault.grantBySig(s, sig);
+    }
+
+    function test_attack_aPreviousPrincipalsSlip_refusedAfterAHandover() public {
+        ICrestVault.SignedGrant memory s = _slip();
+        s.parent = ROOT;
+        bytes memory sig = _signed(PRINCIPAL_PK, vault, s);
+        address next = makeAddr("next principal");
+        vm.prank(principal);
+        vault.proposePrincipal(next, "");
+        vm.prank(next);
+        vault.acceptPrincipal("");
+        vm.expectRevert(ICrestVault.NotAuthorized.selector);
+        vault.grantBySig(s, sig);
+    }
+
+    function test_aSlipInAChildVault_isBoundToTheChild_andStoppedFromAbove() public {
+        vm.prank(buyer);
+        CrestVault child = CrestVault(vault.createChild(agentGrant, 0, ""));
+        ICrestVault.SignedGrant memory s = _slip();
+        (s.parent, s.caps) = (ROOT, _wide());
+        bytes memory sig = _signed(BUYER_PK, child, s);
+        vm.expectRevert(ICrestVault.NotAuthorized.selector);
+        vault.grantBySig(s, sig);
+        vm.prank(principal);
+        vault.setPaused(agentGrant, true, "");
+        vm.expectRevert(abi.encodeWithSelector(ICrestVault.Paused.selector, agentGrant));
+        child.grantBySig(s, sig);
+        vm.prank(principal);
+        vault.setPaused(agentGrant, false, "");
+        child.grantBySig(s, sig);
+        assertEq(child.grantOf(sub), _idOf(s));
+    }
+
+    function test_attack_cancelUnderAMissingParent_refused() public {
+        vm.prank(principal);
+        vm.expectRevert(ICrestVault.NoGrant.selector);
+        vault.cancelSignedGrant(uint256(keccak256("no such grant")), sub, 0, "");
+    }
+
+    /// A signer can always void its own slips, even while paused and unable to delegate. So it can take an ID under its
+    /// own grant that a grant with the same salt would have used; another salt avoids it.
+    function test_observe_aPausedAgentStillCancels_andMayTakeAnIdUnderItsOwnGrant() public {
+        _setAgentCaps(_caps(HOLD, 3 * HOLD, type(uint128).max, 2, true, false));
+        vm.prank(principal);
+        vault.setPaused(agentGrant, true, "");
+        vm.prank(buyer);
+        vault.cancelSignedGrant(agentGrant, sub, bytes32("p"), "");
+        vm.prank(principal);
+        vm.expectRevert(ICrestVault.GrantExists.selector);
+        vault.grant(agentGrant, sub, _wide(), bytes32("p"), "");
+        vm.prank(principal);
+        vault.grant(agentGrant, sub, _wide(), bytes32("another salt"), "");
+    }
+
+    /// The closed grant a cancel leaves, with period 0, breaks no other function.
+    function test_theCancelledId_breaksNothingElse() public {
+        ICrestVault.SignedGrant memory s = _slip();
+        uint256 id = _idOf(s);
+        bytes32 merchant = _merchant();
+        vm.prank(buyer);
+        vault.cancelSignedGrant(s.parent, s.controller, s.salt, "");
+        assertEq(_grantOf(vault, id).caps.period, 0);
+        vm.startPrank(buyer);
+        vault.setCaps(id, _wide(), "");
+        vault.setPaused(id, true, "");
+        vault.allow(id, merchant, true, "");
+        vault.close(id, "");
+        vm.stopPrank();
+        assertTrue(vault.authorityOver(sub, id));
+        assertFalse(vault.isAbove(sub, id));
+        vm.prank(sub);
+        vm.expectRevert(abi.encodeWithSelector(ICrestVault.GrantClosed.selector, id));
+        vault.grant(id, sub2, _wide(), 0, "");
+        vm.prank(sub);
+        vm.expectRevert(abi.encodeWithSelector(ICrestVault.GrantClosed.selector, id));
+        vault.createChild(id, 0, "");
+        vm.prank(principal);
+        vm.expectRevert(abi.encodeWithSelector(ICrestVault.GrantClosed.selector, id));
+        vault.grant(id, sub2, _wide(), 0, "");
+        assertEq(vault.grantOf(sub), 0);
+        _expectRefused(_vterms(address(vault), sub), SUB_PK, abi.encodeWithSelector(ICrestVault.NoGrant.selector));
+        vm.prank(buyer);
+        vault.grant(agentGrant, sub, _wide(), bytes32("another"), "");
+        assertFalse(_grantOf(vault, agentGrant).closed);
+        assertEq(_grantOf(vault, ROOT).controller, principal);
+    }
+
+    /// Signatures made by `cast wallet sign --data` (alloy's EIP-712 encoder) from JSON typed data, not by this file:
+    /// one with a counterparty and a note, one with an empty list and an empty note.
+    function test_signaturesFromAnotherEncoder_land() public {
+        ICrestVault.SignedGrant memory s = _slip();
+        s.deadline = type(uint40).max;
+        uint256 snap = vm.snapshotState();
+        vault.grantBySig(
+            s,
+            hex"a7ee31030f37f66d15d824da0469cd05754a5a9229c187031bac562ad59ce2b4549de60d83d5457fdff909713259de44fc24c5709b44cb2d09fb51ca98eff7cd1c"
+        );
+        assertEq(vault.grantOf(sub), _idOf(s));
+        vm.revertToState(snap);
+        s.counterparties = new bytes32[](0);
+        s.note = "";
+        vault.grantBySig(
+            s,
+            hex"8b0fa705e14862e6b082d7feebab7872430724ec2464fd482eed9e74b165f98250b5cc21231410016a317dc9e76e2bdc746d414aa81bee8db7790d705cbec5771b"
+        );
+        assertEq(vault.grantOf(sub), _idOf(s));
     }
 
     // Gas: the same grant, with one listed counterparty, by a signature and by transactions, each from cold storage.

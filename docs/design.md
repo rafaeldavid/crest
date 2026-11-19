@@ -346,13 +346,13 @@ The maintainer: "Does this require code change for crest? Feels like something q
   - The signed data is bound to one vault and one chain by the vault's EIP-712 domain: the name, version, chain ID and the vault's address.
   - The grant's ID is `keccak256(parent, key, salt)`. Once created it stays taken, even after the grant closes, so the same signature never creates a second grant. No separate nonce is needed.
   - The deadline ends the signature's use.
-  - The signer's key is checked by ECDSA, or by ERC-1271 if it is a contract.
+  - The signer's key is checked by ECDSA. The evaluation also weighed ERC-1271 for a contract signer; the build takes ECDSA only (below).
 - **Revocation.**
   - Before first use, three things stop it:
     - the deadline passes;
     - the signer loses its authority;
     - its path is paused or closed, or may no longer delegate.
-  - An explicit cancel would need about 6 more lines: a closed record under the same ID. It is optional; short deadlines are recommended instead.
+  - An explicit cancel takes the ID out of use with a closed record. The build has it (`cancelSignedGrant`, below), as well as the deadline.
   - After first use it is an ordinary grant: pause it, close it, or stop anything above it.
 - **A parent's stop.** Submitting checks the whole path at that moment, so a signed grant below a stopped parent cannot land. Once landed, the parent's stop stops it at every payment, as it stops any grant.
 - **Size.** About 30 new lines in `CrestVault.sol` and 12 in `ICrestVault.sol` [inferred]:
@@ -390,7 +390,7 @@ The maintainer: "Does this require code change for crest? Feels like something q
 - a signer that lost its authority between signing and submission;
 - limits, key, parent or salt changed after signing;
 - a key that holds a grant elsewhere, when the signer is not above that grant;
-- a malleable signature, which yields the same ID and is refused as a replay.
+- a malleable signature, refused outright: the build takes a low `s` only.
 
 **Recommendation:** build (a) in the next build, with the vault as the buyer, the fee and the external list, after the first stage of the two-model test (T-560).
 
@@ -402,10 +402,13 @@ What was built (`grantBySig`, `cancelSignedGrant`, `SignedGrant`):
 - **It is not a bearer instrument.** The slip names the key it grants. Whoever submits it gains nothing, and only that key can sign the deals the grant pays. A slip that leaks before use lets its holder do only what the signer already chose: land that grant for that key, once.
 - **Replay.** The grant's ID, `keccak256(parent, controller, salt)`, is taken once and stays taken, even after the grant closes, so a second submission is refused.
 - **Cancelling an unused slip.** `cancelSignedGrant(parent, controller, salt, note)` takes the slip's grant ID out of use. It writes a closed grant under that ID and emits `Closed`. Anyone who may sign for that parent may call it: the parent's controller and every authority above it, the principal included. A submission after it is refused with `GrantExists`. A slip also ends at its deadline. Once a slip is used, `close` ends its grant as usual.
-- **Signatures.** 65-byte ECDSA with a low `s` only. A malleable twin, a 64-byte compact form or any other length is refused with `BadSignature`. A contract that controls a grant grants by transaction: the vault never asks it by ERC-1271.
+- **Signatures.** 65-byte ECDSA with a low `s` only. A malleable twin, a 64-byte compact form, an invalid `v` or any other length is refused with `BadGrantSignature`. A contract that controls a grant grants by transaction: the vault never asks it by ERC-1271. An EIP-7702 account still holds its key, so it signs as any key does.
+- **Only for a free key.** A slip lands only for a key that holds no grant in the vault. So an older slip can never replace a key's later grant or give it fresh counters. Moving a key from one grant to another takes a transaction by authority above its grant.
+- **Who may cancel.** Anyone with authority over the existing parent grant, even while paused or unable to delegate, so a signer can always void its own slips. A cancel emits `Closed` with no `Granted` before it. It may take an ID that a later grant with the same salt would have used; another salt avoids it.
+- **Races.** A slip's holder can land it before a cancel lands, so short deadlines remain the first defence for a slip that might leak. A relayer that batches a slip with a first payment should let the slip's call fail without failing the batch, for a slip already landed or cancelled.
 - **Measured (2026-11-19).**
   - **Gas, with one listed counterparty.** A signed grant costs 183,683 execution gas plus 5,800 calldata gas, in one transaction anyone sends. The same grant by transaction costs 151,868 plus 3,236. Its allow-list entry, as a second transaction, costs 28,646 plus 1,924, measured with warm storage. So with the 21,000 base of each transaction, a signed grant costs about 210,500 gas against about 227,700 for the controller's two transactions, and the controller sends none. A payment costs the same either way.
-  - **Lines.** `CrestVault.sol` went from 411 to 473 lines, and `ICrestVault.sol` from 274 to 304. The six contract files went from 943 to 1,035.
+  - **Lines.** `CrestVault.sol` went from 411 to 475 lines, and `ICrestVault.sol` from 274 to 305. The six contract files went from 943 to 1,038.
 
 ## Open, for the maintainer
 
