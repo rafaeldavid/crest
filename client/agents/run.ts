@@ -12,7 +12,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { holdbackRoot, viem, type J } from '../holdback.ts';
 import { MAX128, OPEN, Principal, VAULT_ABI, type Caps } from './principal.ts';
@@ -58,6 +58,25 @@ const model = !vendor && priceAs ? { id: priceAs, provider: 'scripted', model: '
 const SESSIONS: Record<number, number> = { 1: 1, 2: 1, 3: 4, 4: 2, 5: 2, 6: 2, 7: 1, 8: 2, 9: 2, 10: 1 };
 const sessions = scenarios.reduce((n, s) => n + (SESSIONS[s.n] ?? 1), 0);
 const usd = (micro: number) => `USD ${(micro / 1e6).toFixed(2)}`;
+/** The quotes this machine asked the live test seller for, as epoch ms: shared by every Sepolia run, kept beside the keys. */
+const LEDGER = join(dirname(resolve(flag('keys') ?? '.')), 't560-quote-ledger.json');
+const ledger = (): number[] => { try { return JSON.parse(readFileSync(LEDGER, 'utf8')) as number[]; } catch { return []; } };
+const noteQuote = (at: number) => writeFileSync(LEDGER, JSON.stringify([...ledger(), at]));
+/** Waits until the seller has a slot: fewer than 3 quotes in the last hour and fewer than 10 in this UTC day, with a minute's margin. */
+async function paceQuote(label: string): Promise<void> {
+  if (!SEPOLIA_WORLD) return;
+  for (;;) {
+    const now = Date.now(), q = ledger();
+    const hour = q.filter((t) => t > now - 3_600_000 - 60_000).sort((a, b) => a - b);
+    const today = q.filter((t) => new Date(t).toISOString().slice(0, 10) === new Date(now).toISOString().slice(0, 10));
+    let until = 0;
+    if (hour.length >= 3) until = hour[hour.length - 3]! + 3_600_000 + 60_000;
+    if (today.length >= 10) until = Math.max(until, Date.parse(`${new Date(now).toISOString().slice(0, 10)}T00:00:00Z`) + 86_400_000 + 60_000);
+    if (until <= now) return;
+    console.log(`  ${label}: waiting ${Math.round((until - now) / 1000)} s for the test seller's quote limit (3 an hour, 10 a day per IP)`);
+    await new Promise((r) => setTimeout(r, Math.min(until - now, 600_000)));
+  }
+}
 /**
  * The batch's hard budget, in micro-USD at list prices: the ceiling. Before every model turn the runner adds the most
  * that turn can cost (its whole input at the dearest input price, plus the full output cap) to what the batch has spent
@@ -147,7 +166,9 @@ try {
   const webUrl = `http://127.0.0.1:${(web.address() as AddressInfo).port}`;
 
   // A probe quote: the hold one purchase costs (price plus the adjudication fee), as the offer states it.
-  const probe = await probeHold();
+  // On Sepolia the live test seller serves 3 quotes per IP an hour and 10 a day (apps/test-agents catalog.ts, LIMITS):
+  // no probe quote there, and a shared ledger paces every quote this machine asks for.
+  const probe = SEPOLIA_WORLD ? await fromCard() : await probeHold();
   const H = probe.H;
   // The seller's payout address and the deal's three adjudicators, as the offer names them: the approved-merchant entry.
   const adj = probe.adj;
@@ -161,6 +182,15 @@ try {
     writeFileSync(join(out, 'results.json'), `${JSON.stringify(rows, null, 2)}\n`);
   }
   web.close();
+
+  /** The hold and the approved-merchant entry from the seller's card and the operators' discovery, with no quote. */
+  async function fromCard(): Promise<{ H: bigint; payout: string; adj: [string, string, string] }> {
+    const card = (await (await fetch(`${w.seller.base}/agent.json`)).json()) as J;
+    const d = (await (await fetch(`${w.operators[0]}/.well-known/holdback.json`)).json()) as J;
+    const fee = BigInt(card.offers?.[0]?.fees?.adjudication?.amount ?? '1000000');
+    const price = 1_000_000n; // the quote route's sample product, 1 tUSDC (apps/test-agents quote.ts, QUOTE_PRICE_UNITS)
+    return { H: price + fee, payout: String(card.seller).toLowerCase(), adj: d.demo.adjudicators.map((a: J) => String(a.address).toLowerCase()) as [string, string, string] };
+  }
 
   async function probeHold(): Promise<{ H: bigint; payout: string; adj: [string, string, string] }> {
     const key = v.accounts.generatePrivateKey();
@@ -221,6 +251,7 @@ try {
     const subAgent = { current: null as null | ReturnType<typeof agentOf> };
 
     const session = async (label: string, o: { brief?: 'urgent'; vault?: string; agent?: 'sub' } = {}): Promise<string> => {
+      await paceQuote(label);
       if (budgetHit) { const nr = { scenario: s.n, name: s.name, purchase: label, model: model?.id ?? 'scripted', got: 'not run', notRun: budgetHit }; sessionRows.push(nr); rec.add('runner', 'session.not-run', nr); log(`  ${label}: not run: ${budgetHit}`); return 'not run'; }
       const who = o.agent === 'sub' ? subAgent.current! : agent;
       const vault = o.vault ?? principal.vault;
@@ -302,6 +333,7 @@ try {
         commands: vaultCmds.map((e: J) => ({ args: e.args, exit: e.exit })), refusedCalls: events.filter((e: J) => e.kind === 'refused').map((e: J) => ({ tool: e.tool, reason: e.reason })),
       };
       sessionRows.push(row);
+      if (SEPOLIA_WORLD) for (const c of vaultCmds.filter((e: J) => !['approve', 'limits', 'resume', '--help'].includes(e.args?.[0]))) noteQuote(Date.parse(c.at));
       rec.add('runner', 'session.end', row);
       log(`  ${label}: ${got} (${row.status}, ${row.turns} turns, ${row.seconds} s${cost !== null ? `, ${usd(cost)}` : ''})`);
       return got;
@@ -319,6 +351,8 @@ try {
       H, principal, grant, merchant, periodSec,
       buy: session,
       async openDeal(label) {
+        await paceQuote(label);
+        if (SEPOLIA_WORLD) noteQuote(Date.now());
         w.seller.hold(true);
         const q = await runCommand(agent, principal.vault, [w.seller.quote, '{"rows": 5}', (5n * H).toString()]);
         const id = /vault-buy approve (0x[0-9a-f]{64})/.exec(q.stderr)?.[1];
