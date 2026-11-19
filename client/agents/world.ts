@@ -122,7 +122,9 @@ export async function startWorld(o: { log?: (l: string) => void; sellerLog?: (l:
       if (r.status !== 'success') throw new Error(`${name} did not deploy`);
       return { address: (r.contractAddress as string).toLowerCase(), gas: r.gasUsed as bigint };
     };
-    const factory = await deploy('CrestFactory', []);
+    // Since Crest PR 8 the factory takes a fee rate and a sweeper: no fee here (rate 0, no sweeper). An older build takes none.
+    const factoryInputs = (crestArtifact('CrestFactory').abi.find((x: J) => x.type === 'constructor')?.inputs ?? []).length;
+    const factory = await deploy('CrestFactory', factoryInputs === 2 ? [0, '0x0000000000000000000000000000000000000000'] : []);
     const module = await deploy('HoldbackModule', [d.rules]);
     say(`Crest: factory ${factory.address} (${factory.gas} gas), module ${module.address} (${module.gas} gas).`);
 

@@ -44,6 +44,12 @@ const env = (k: string): string => { const v = process.env[k]; if (!v) throw new
 const units = (n: bigint, decimals = 6) => { const s = n.toString().padStart(decimals + 1, '0'); const f = s.slice(-decimals).replace(/0+$/, ''); return `${s.slice(0, -decimals)}${f ? `.${f}` : ''}`; };
 const limitText = (n: bigint, max: bigint, unit = ' tUSDC') => (n === max ? 'no limit' : `${units(n)}${unit}`);
 
+// An RPC address can carry a provider key in its path: no message shows more of it than its origin.
+const RPC_RAW = process.env['CREST_RPC'] ?? '';
+const redact = (t: string) => { try { return RPC_RAW ? t.split(RPC_RAW).join(`${new URL(RPC_RAW).origin}/…`) : t; } catch { return t.split(RPC_RAW).join('<the RPC>'); } };
+const die = (e: unknown) => { console.error(redact(String((e as Error)?.message ?? e)).replace(/[^\x20-\x7e\n]/g, '?').slice(0, 2000)); process.exit(e instanceof Refused ? 5 : 1); };
+process.on('uncaughtException', die);
+process.on('unhandledRejection', die);
 if (pos[0] === '--help' || pos[0] === '-h') { console.log(USAGE); process.exit(0); }
 if (!pos[0]) { console.error(USAGE); process.exit(2); }
 
@@ -59,7 +65,9 @@ const ERRORS = fundingErrors();
 const rpc = env('CREST_RPC');
 const publicClient = v.createPublicClient({ transport: v.http(rpc) });
 const chainId = await publicClient.getChainId();
-if (MAINNET_CHAIN_IDS.includes(chainId)) throw new Error(`the RPC answers chain ${chainId}, a mainnet: vault-buy runs on a local chain or a test network only`);
+// Test chains only, by allow list: a local chain (31337) or Sepolia (11155111). The repository's mainnet list is checked too.
+const TEST_CHAINS = [31337, 11155111];
+if (MAINNET_CHAIN_IDS.includes(chainId) || !TEST_CHAINS.includes(chainId)) throw new Error(`the RPC answers chain ${chainId}: vault-buy runs only on a local chain (31337) or Sepolia (11155111)`);
 const chain = v.defineChain({ id: chainId, name: `chain ${chainId}`, nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: { default: { http: [rpc] } } });
 const vault = env('CREST_VAULT').toLowerCase();
 /**
@@ -262,8 +270,11 @@ try {
     const total = BigInt(shown.fees.total.amount);
     if (total > BigInt(maxRaw!)) throw new Refused(`the offer costs ${shown.fees.total.amount} base units, above ${maxRaw}: nothing is signed or paid`);
     if (signer.paid) { await follow(p); process.exit(0); }
-    const closed = await closeEnded(id);
+    // A run that funded and then stopped before it saved: the operators record the funding, so save it and follow the deal.
+    const state = String(((await (await fetch(`${operators[0]}/v1/commitments/${id}`)).json()) as J)?.escrowState ?? '');
+    if (p.saved.funding && ['Held', 'Delivered', 'Released', 'Refunded', 'Settled'].includes(state)) { await signer.agreeAndFund(id); await follow(reload(p)); process.exit(0); }
     await signer.checkOffer(id, shown); // every operator still serves exactly this offer, and the adjudicator accepted it
+    const closed = await closeEnded(id); // tells the vault about this agent's ended deals; it moves no money
     await signer.fundingFiles(id); // records the funding nonces the operators prepared; the vault signs nothing
     p = reload(p);
     const { terms, args: callArgs } = await fundingCall(signer, p, id, total);
@@ -326,6 +337,5 @@ try {
     process.exit(3);
   }
 } catch (e) {
-  console.error(String((e as Error).message ?? e).replace(/[^\x20-\x7e\n]/g, '?').slice(0, 2000));
-  process.exit(e instanceof Refused ? 5 : 1);
+  die(e);
 }

@@ -63,8 +63,19 @@ const usd = (micro: number) => `USD ${(micro / 1e6).toFixed(2)}`;
  * left are recorded as not run.
  */
 const BUDGET = Math.round(Number(flag('budget-usd', '0')) * 1e6);
-if ((vendor || priceAs) && !(BUDGET > 0)) { console.error('a live run needs --budget-usd <USD>: the most the whole batch may cost at list prices'); process.exit(2); }
+if (cmd === 'run' && (vendor || priceAs) && !(BUDGET > 0)) { console.error('a live run needs --budget-usd <USD>: the most the whole batch may cost at list prices'); process.exit(2); }
 const price = model ? duet.measures.inputPrice(model.id) : null;
+/**
+ * A model's list prices from the duet's price file, with its long-prompt tier where it has one (Claude Haiku 5.5 costs
+ * five times as much above 100,000 prompt tokens). The duet's own priceOf reads the base prices only.
+ */
+const PRICES = JSON.parse(readFileSync(join(root, 'config', 'model-prices.json'), 'utf8')).models as Record<string, J>;
+const tiers = model ? PRICES[model.id.replace(/@\d{4}-\d{2}-\d{2}$/, '')] : undefined;
+const priceAt = (input: number) => (tiers?.overPromptTokens && input > tiers.overPromptTokens.threshold ? tiers.overPromptTokens : tiers);
+/** The most one turn can cost, in micro-USD: its whole input at the dearest input price of the dearest tier it can reach, and the full output cap. */
+const worstTurn = (input: number) => { const p = priceAt(input) ?? {}; const inPrice = Math.max(p.input ?? 0, p.cacheWrite5m ?? 0, p.cacheWrite1h ?? 0); return Math.ceil((input * inPrice + duet.providers.MAX_OUTPUT_TOKENS * (p.output ?? 0)) / 1_000_000); };
+/** What a turn cost, in micro-USD, at the tier its input reached. */
+const turnCost = (u: J) => { const p = priceAt(u.input) ?? {}; const fresh = Math.max(0, u.input - u.cacheRead - (u.cacheWrite ?? 0)); return Math.round((fresh * (p.input ?? 0) + u.cacheRead * (p.cacheRead ?? p.input ?? 0) + (u.cacheWrite ?? 0) * (p.cacheWrite5m ?? p.input ?? 0) + u.output * (p.output ?? 0)) / 1_000_000); };
 if ((vendor || priceAs) && !price) { console.error(`${model!.id} has no price in config/model-prices.json: nothing was sent`); process.exit(2); }
 
 const plan = [
@@ -91,11 +102,14 @@ function guard(p: J): J {
   return {
     ...p,
     async turn(system: string, history: J[], tools: J[], signal: AbortSignal) {
-      const input = Math.ceil((system.length + JSON.stringify(history).length + JSON.stringify(tools).length) / 3);
-      const worst = Math.ceil((input * price!.input + duet.providers.MAX_OUTPUT_TOKENS * price!.output) / 1_000_000);
+      // Characters over two: hex and JSON tokenize densely, so this errs high.
+      const input = Math.ceil((system.length + JSON.stringify(history).length + JSON.stringify(tools).length) / 2);
+      const worst = worstTurn(input);
       if (spent + worst > BUDGET) { budgetHit = `the batch budget of ${usd(BUDGET)}: ${usd(spent)} spent, and the next turn could cost up to ${usd(worst)}`; throw new Error(`not sent: ${budgetHit}`); }
-      const a = await p.turn(system, history, tools, signal);
-      spent += duet.measures.priceOf(model!.id, a.usage) ?? 0;
+      let a: J;
+      // A turn that fails may still have been billed (a retried or cut request): count the most it could have cost.
+      try { a = await p.turn(system, history, tools, signal); } catch (e) { spent += worst; throw e; }
+      spent += turnCost(a.usage);
       return a;
     },
   };
@@ -199,6 +213,7 @@ try {
     const subAgent = { current: null as null | ReturnType<typeof agentOf> };
 
     const session = async (label: string, o: { brief?: 'urgent'; vault?: string; agent?: 'sub' } = {}): Promise<string> => {
+      if (budgetHit) { const nr = { scenario: s.n, name: s.name, purchase: label, model: model?.id ?? 'scripted', got: 'not run', notRun: budgetHit }; sessionRows.push(nr); rec.add('runner', 'session.not-run', nr); log(`  ${label}: not run: ${budgetHit}`); return 'not run'; }
       const who = o.agent === 'sub' ? subAgent.current! : agent;
       const vault = o.vault ?? principal.vault;
       const started = Date.now();
@@ -261,7 +276,7 @@ try {
       const lines = events.filter((e: J) => e.kind === 'command' && e.command === 'vault-buy').flatMap((e: J) => String(e.stdout ?? '').split('\n')).map((l: string) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
       // The vault refuses either at the quote's dry run (the agent then stops, as the page says) or at the funding.
       const dryRun = [...lines].reverse().find((x: J) => x?.vault?.check?.allows === false);
-      const outcome = [...lines].reverse().find((x: J) => typeof x.outcome === 'string' || typeof x.refused === 'string') ?? (dryRun ? { refused: dryRun.vault.check.refused, said: dryRun.vault.check.said, commitmentId: dryRun.commitmentId, atDryRun: true } : undefined);
+      const outcome = [...lines].reverse().find((x: J) => typeof x.outcome === 'string' || typeof x.refused === 'string') ?? (dryRun ? { refused: dryRun.vault.check.refused, said: dryRun.vault.check.said, commitmentId: dryRun.commitmentId, grant: dryRun.vault.check.grant, atDryRun: true } : undefined);
       const gotRaw = !outcome ? 'no purchase' : outcome.outcome ? String(outcome.outcome) : `refused ${outcome.refused}`;
       const got = /refused .*(Balance|Insufficient|exceeds balance)/i.test(gotRaw) ? 'refused insufficient balance' : gotRaw;
       const turns = events.filter((e: J) => e.kind === 'model.turn');
@@ -271,7 +286,7 @@ try {
       const quoteAt = vaultCmds.find((e: J) => !['approve', 'limits', 'resume'].includes(e.args?.[0]));
       const lastAt = vaultCmds.at(-1);
       const row = {
-        scenario: s.n, name: s.name, purchase: label, model: model?.id ?? 'scripted', got, revert: outcome?.refused ?? null, said: outcome?.said ?? null,
+        scenario: s.n, name: s.name, purchase: label, model: model?.id ?? 'scripted', got, revert: outcome?.refused ?? null, revertGrant: outcome?.grant ?? null, atDryRun: outcome?.atDryRun === true, said: outcome?.said ?? null,
         commitmentId: outcome?.commitmentId ?? null, fundingTx: outcome?.funding?.tx ?? null, gas: outcome?.funding?.gasUsed ?? null,
         status: end.status, finish: { outcome: end.outcome, report: end.report }, turns: turns.length, tokens: tok, costMicroUsd: cost,
         seconds: Math.round((Date.now() - started) / 1000),
@@ -337,6 +352,7 @@ try {
         log(`  check ${label}: expected ${expected}, got ${got}${x.match ? '' : '  <-- differs'}`);
       },
       vaultBalance: () => principal.balance(),
+      lastRevertGrant: () => sessionRows.at(-1)?.revertGrant ?? null,
     };
     try {
       await s.run(c);
@@ -344,7 +360,7 @@ try {
       c.check('scenario ran to its end', 'yes', `no: ${(e as Error).message.slice(0, 300)}`);
     }
     rec.add('runner', 'scenario.end', { checks, worldErrors: w.errors.splice(0) });
-    const summary = { scenario: s.n, name: s.name, crest: crestCommit, buyerIs: BUYER, title: s.title, expect: s.expect, model: model?.id ?? 'scripted', matched: checks.every((x) => x.match), checks, sessions: sessionRows };
+    const summary = { scenario: s.n, name: s.name, crest: crestCommit, buyerIs: BUYER, title: s.title, expect: s.expect, model: model?.id ?? 'scripted', matched: !budgetHit && checks.every((x) => x.match), ...(budgetHit ? { notRun: budgetHit } : {}), checks, sessions: sessionRows };
     writeFileSync(join(dir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
     return [summary];
   }

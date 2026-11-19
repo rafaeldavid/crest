@@ -27,6 +27,8 @@ export interface Ctx {
   childVault(caps: Caps): Promise<{ vault: string; subGrant: bigint }>;
   check(label: string, expected: string, got: string, note?: string): void;
   vaultBalance(): Promise<bigint>;
+  /** The grant the last purchase's refusal named, as a decimal string; null when it named none. */
+  lastRevertGrant(): string | null;
   periodSec: number;
 }
 
@@ -121,6 +123,7 @@ export const SCENARIOS: Scenario[] = [
       c.check('sub-agent inside both limits', released, await c.buy('sub-agent inside both limits', { vault: child.vault, agent: 'sub' }));
       await c.principal.setCaps(c.grant, { ...inside(c.H), mayDelegate: true, perSpend: c.H - 1n }, 'narrow the agent: one payment below the price');
       c.check("sub-agent above the parent's limit", refused('OverPerSpend'), await c.buy("sub-agent above the parent's limit", { vault: child.vault, agent: 'sub' }));
+      c.check('the refusing grant is the parent grant', c.grant.toString(), c.lastRevertGrant() ?? 'none named');
     },
   },
   {
