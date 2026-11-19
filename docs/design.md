@@ -243,16 +243,26 @@ The proposal, with the reason for each part:
    - Only a payment a module asks for, in `charge`: `fee = floor(amount × FEE_BPS / 10,000)`, rounded down, so never above the stated rate.
    - None on a deposit, a `withdraw`, money coming back (a refund, a void or `reclaim`), `fundChild`, `takeBackFromChild` or `returnToParent`.
    - A child vault's payment charges the fee once, in the vault that pays. The parent's `checkPath` is a view and moves nothing.
-3. **A refused payment charges nothing.** The fee moves inside `charge`, after every check. A refusal anywhere later in the transaction, such as Holdback's agreement call reverting, reverts the fee with it.
-4. **The hold is never blocked or shrunk.**
-   - The fee comes from the vault's balance on top of the payment, in the transaction that funds.
+3. **A refused payment charges nothing.** The fee is counted inside `charge`, after every check. A refusal anywhere later in the transaction, such as Holdback's agreement call reverting, reverts it.
+4. **The fee is owed, then collected.**
+   - `charge` adds the fee to the vault's `feeOwed` and moves no token to the recipient.
+   - Anyone may call `collectFee()`, which sends exactly `feeOwed` to the fixed recipient.
+   - `withdraw`, `fundChild` and `returnToParent` move only the balance above `feeOwed`.
+   - Why: the recipient can never change. If it ever refused tokens, say a contract that reverts, a key the token blocks, or an address that was lost, a fee pushed at payment time would block every payment from every vault of that factory. A fee that is owed blocks nothing: payments never depend on the recipient. At worst, a fee waits uncollected in the vault.
+5. **The recipient must be an address that cannot be lost.** For example, a multisig the maintainers hold, recorded in the deployment record. If it is a contract, it must be able to move the token onward. Otherwise collected fees stay in it for good, and only that contract's own code decides their fate.
+6. **The hold is never blocked or shrunk.**
+   - The fee is owed on top of the payment.
    - The ERC-3009 authorization stays exactly the payment's amount, so the hold receives what the terms say.
    - After funding, nothing in Crest reaches the hold, the fee included.
-   - A vault holding less than the amount plus the fee refuses the payment before anything is funded.
-5. **It counts against the limits.** The fee counts with the payment against every limit on the path, so the principal's limits bound everything that leaves the vault. At 0 nothing changes.
-6. **The constructor refuses only the malformed:** a rate above 10,000, or a non-zero rate with no recipient. Any lower cap is the maintainer's choice, not the code's.
-7. **One event, only when there is a fee:** `FeePaid(grant, recipient, fee)`. `Charged` is unchanged.
-8. **At a rate of 0, as near zero cost as measurable.** One comparison of an immutable in `charge`. The gas of a funding before and after goes in the pull request.
+   - A vault whose balance above `feeOwed` is less than the amount plus the fee refuses the payment before anything is funded.
+7. **It counts against the limits.** The fee counts with the payment against every limit on the path, so the principal's limits bound everything that leaves the vault. At 0 nothing changes.
+8. **The constructor refuses only the malformed:** a rate above 10,000, or a non-zero rate with no recipient. Any lower cap is the maintainer's choice, not the code's.
+9. **Two events, only when there is a fee:**
+   - `FeeOwed(grant, fee)` when a payment owes one;
+   - `FeeCollected(recipient, amount, by)` when it is collected.
+
+   `Charged` is unchanged.
+10. **At a rate of 0, as near zero cost as measurable.** One comparison of an immutable in `charge`. The gas of a funding before and after goes in the pull request.
 
 Attack tests that must fail:
 - anyone changing the rate or the recipient: no selector can, and none appears in the selector allowlist;
@@ -261,7 +271,10 @@ Attack tests that must fail:
 - a fee on a refund, a void, `reclaim`, `withdraw`, `fundChild` or `returnToParent`;
 - a refused payment that still pays a fee;
 - a hold that receives less than its terms;
-- a vault short of the fee that still funds.
+- a vault short of the fee that still funds;
+- a recipient that reverts on receipt and so blocks a payment;
+- a `withdraw`, a fill or a return that takes the fee owed;
+- `collectFee` sending anything but `feeOwed`, or to anyone but the recipient.
 
 Every fee line is in the outside review's scope: the maintainer set it to all six contract files, in deep mode.
 
@@ -282,7 +295,11 @@ The proposal, with the reason for each part:
    - A payment asks the list of every grant on its path that names one, here and in every ancestor vault. Today's `checkPath` walk stays.
    - So a child grant or a child vault pointing at a looser list still needs every list above it to say yes. It can never be looser than its parent's path.
 3. **The call is read-only, gas-capped and fails closed.**
-   - The vault calls `allows(vault, grant, counterparty)` with `staticcall` and a fixed gas cap: 30,000 gas is proposed, measured against the default list.
+   - The vault calls `allows(vault, grant, counterparty)` with `staticcall` and a fixed gas cap. 30,000 gas is proposed.
+   - The cap is fixed only after measuring two lists:
+     - the default list;
+     - a list that reads another contract's storage, as an identity-based list would: a cold call and cold reads in a registry.
+   - The pull request reports both.
    - Only one answer counts as a yes: exactly 32 bytes equal to the function's selector, as ERC-1271 returns a magic value.
    - A checker that reverts, runs out of gas or returns anything else refuses the payment.
    - It is read only in `charge` and `checkPath`, never after funding, so it cannot touch a deal already funded, and it never moves money.
