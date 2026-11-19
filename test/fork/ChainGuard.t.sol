@@ -6,6 +6,7 @@ import {HoldbackRules} from "holdback/HoldbackRules.sol";
 
 import {Deploy} from "../../script/Deploy.s.sol";
 import {CrestFactory} from "../../src/CrestFactory.sol";
+import {ICrestVault} from "../../src/ICrestVault.sol";
 import {HoldbackModule} from "../../src/modules/holdback/HoldbackModule.sol";
 
 /// Which chain the deploy script deploys to. Forge simulates a script with `block.chainid` 31337 from foundry.toml
@@ -30,10 +31,12 @@ abstract contract ChainGuardBase is Test {
 /// `CREST_FORK_URL`: a fork of Sepolia. The script runs as forge runs it: `run` deploys against the rules contract in
 /// Holdback's pinned record, a rerun deploys nothing, and `verify` records Sepolia and the CREATE2 addresses.
 contract DeployOnSepoliaTest is ChainGuardBase {
-    HoldbackRules internal constant RULES = HoldbackRules(0x3BE45128565ABBc35DbD4660716b703Ff489f1b4);
+    HoldbackRules internal RULES;
 
     function setUp() public {
         _forkOrSkip("CREST_FORK_URL");
+        RULES =
+            HoldbackRules(vm.parseJsonAddress(vm.readFile("lib/holdback/contracts/deployments/sepolia.json"), ".rules"));
     }
 
     function test_onSepolia_runDeploys_rerunIsANoop_andVerifyRecordsIt() public {
@@ -56,7 +59,12 @@ contract DeployOnSepoliaTest is ChainGuardBase {
         vm.removeFile(path);
         bytes32 salt = keccak256("crest v01");
         bytes memory moduleCode = abi.encodePacked(type(HoldbackModule).creationCode, abi.encode(RULES));
-        bytes memory factoryInit = abi.encodePacked(type(CrestFactory).creationCode, abi.encode(uint256(0), address(0)));
+        // The fee the script reads from `CREST_FEE_BPS` and `CREST_FEE_SWEEPER`, so the rehearsal runs with the real
+        // deploy's settings when they are set.
+        (uint256 feeBps, address feeSweeper) = script.feeOf();
+        assertEq(ICrestVault(f.IMPLEMENTATION()).FEE_BPS(), feeBps);
+        assertEq(ICrestVault(f.IMPLEMENTATION()).FEE_SWEEPER(), feeSweeper);
+        bytes memory factoryInit = abi.encodePacked(type(CrestFactory).creationCode, abi.encode(feeBps, feeSweeper));
         assertEq(address(f), vm.computeCreate2Address(salt, keccak256(factoryInit)));
         assertEq(address(m), vm.computeCreate2Address(salt, keccak256(moduleCode)));
     }
@@ -74,7 +82,7 @@ contract DeployOnChainOneTest is ChainGuardBase {
         vm.expectRevert(abi.encodeWithSelector(Deploy.NotATestNetwork.selector, 1));
         script.run();
         vm.expectRevert(abi.encodeWithSelector(Deploy.NotATestNetwork.selector, 1));
-        script.deploy(HoldbackRules(0x3BE45128565ABBc35DbD4660716b703Ff489f1b4));
+        script.deploy(HoldbackRules(makeAddr("Sepolia's rules contract")));
         vm.expectRevert(abi.encodeWithSelector(Deploy.NotATestNetwork.selector, 1));
         script.verify();
     }
