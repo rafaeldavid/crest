@@ -197,7 +197,7 @@ The three conditions for a Holdback buyer message:
 9. A sibling sub-agent signs for another sub-agent's child vault.
 
 **What Holdback's operators and adjudicator must change.** None of this is Crest's code.
-- **Who carries it.** Holdback's T-549 carries it in schema v0.12 and its two pull requests: the buyer's fields in the schema one, the buyer's checks in the settlement one. It adds them on the maintainer's yes on Holdback's record (D84).
+- **Who carries it.** Holdback's T-549 carries it in schema v0.12 and its two pull requests: the buyer's fields in the schema one, the buyer's checks in the settlement one. The maintainer said yes on 2026-11-19, so T-549 adds them after T-548 merges.
 - **The pinned bundles.** `site/buy.mjs` and `site/try.mjs` stay pinned by hash, so their ECDSA path stays byte-identical. A vault buyer signs through Crest's own tooling or a new command.
 
 The changes:
@@ -332,7 +332,7 @@ Scope: the default list contract and its interface are new files, so the outside
 - **A trademark search for the name:** "go ahead and check". A first desk search is running and kept privately. A lawyer's opinion comes after it and is the maintainer's to ask for.
 - **Building order:** the vault as the buyer, the external list and the fee are built after the first stage of the two-model test (T-560), which keeps running on what is merged.
 
-### 17. Limits for a sub-agent by a signature alone (evaluated for the maintainer; not built)
+### 17. Limits for a sub-agent by a signature alone (decided 2026-11-19; shape (a) built)
 
 The maintainer: "Does this require code change for crest? Feels like something quite useful. Evaluate it, if it can be done we might as well do now". It needs a code change in the vault. Two shapes were compared.
 
@@ -394,14 +394,29 @@ The maintainer: "Does this require code change for crest? Feels like something q
 
 **Recommendation:** build (a) in the next build, with the vault as the buyer, the fee and the external list, after the first stage of the two-model test (T-560).
 
+**Decided and built.** The maintainer, after the design and a question about a leaked signature: "Ok that looks good then implement". Shape (a) only. The fee and the external list still wait for his word.
+
+What was built (`grantBySig`, `cancelSignedGrant`, `SignedGrant`):
+- **What is signed.** `SignedGrant(parent, controller, caps, salt, counterparties, deadline, note)`, under the vault's EIP-712 domain: name "Crest", version "1", the chain ID and the vault's address. So every limit, the starting allow list, the note and the deadline are signed, and so are the vault and the chain.
+- **Who may sign.** Exactly who may call `grant` for that parent. The vault recovers the signer and runs `grant`'s checks with it in the caller's place, at submission. A slip from a key without authority, from a closed grant's key, or from a path that is paused, expired or may not delegate is refused. A slip that landed before a stop gives an ordinary grant, which the stop reaches at every payment, as it reaches any grant.
+- **It is not a bearer instrument.** The slip names the key it grants. Whoever submits it gains nothing, and only that key can sign the deals the grant pays. A slip that leaks before use lets its holder do only what the signer already chose: land that grant for that key, once.
+- **Replay.** The grant's ID, `keccak256(parent, controller, salt)`, is taken once and stays taken, even after the grant closes, so a second submission is refused.
+- **Cancelling an unused slip.** `cancelSignedGrant(parent, controller, salt, note)` takes the slip's grant ID out of use. It writes a closed grant under that ID and emits `Closed`. Anyone who may sign for that parent may call it: the parent's controller and every authority above it, the principal included. A submission after it is refused with `GrantExists`. A slip also ends at its deadline. Once a slip is used, `close` ends its grant as usual.
+- **Signatures.** 65-byte ECDSA with a low `s` only. A malleable twin, a 64-byte compact form or any other length is refused with `BadSignature`. A contract that controls a grant grants by transaction: the vault never asks it by ERC-1271.
+- **Measured (2026-11-19).**
+  - **Gas, with one listed counterparty.** A signed grant costs 183,683 execution gas plus 5,800 calldata gas, in one transaction anyone sends. The same grant by transaction costs 151,868 plus 3,236. Its allow-list entry, as a second transaction, costs 28,646 plus 1,924, measured with warm storage. So with the 21,000 base of each transaction, a signed grant costs about 210,500 gas against about 227,700 for the controller's two transactions, and the controller sends none. A payment costs the same either way.
+  - **Lines.** `CrestVault.sol` went from 411 to 473 lines, and `ICrestVault.sol` from 274 to 304. The six contract files went from 943 to 1,035.
+
 ## Open, for the maintainer
 
 1. **The fee's design** (section 14): fixed at deployment in the vault implementation, taken only on a payment, rounded down, never on the hold. To accept or change before it is built.
 2. **The external merchant list's design** (section 15): one list contract per grant, set with the limits, asked read-only and gas-capped at every level. To accept or change before it is built.
-3. **Grants by signature** (section 17): shape (a) is recommended for the next build.
+3. **Grants by signature** (section 17): decided and built, shape (a).
 4. **Holdback's side of the vault as the buyer** (section 12):
-    - the maintainer's yes on Holdback's record (D84), so T-549's schema v0.12 carries the buyer's longer signature;
-    - his acceptance that a vault buyer narrows ADR-0038 point 4.
+    - **The schema change is decided (2026-11-19).** Holdback's schema v0.12 carries a contract buyer's longer signature, and its operators read a contract buyer, built by the standing-offers sessions in Holdback.
+      - To "Add a contract buyer, such as a Crest vault, to T-549's schema v0.12?" the maintainer said "Yes, add it".
+      - To "Should a vault that buys (a contract as the buyer) go into the same schema change as standing offers?" he said "Yes, same change".
+    - **Still open:** a stop that reaches a vault buyer's funded deals, which narrows Holdback's ADR-0038 point 4. Holdback's own record (D84 and ADR-0038) is the coordinator's to update.
 5. **The name:** the first desk search found the name crowded in crypto and finance, with a close use in the same field. Until the maintainer decides, it spreads no further: no site page, package name, domain or announcement.
 6. **Crow paying to create vaults on request:** a new request field or route; the relay of fundings is decided (section 13).
 7. **Depending on third-party code a single address can pause, or under copyleft or source-available licences:** none in the first version.
