@@ -41,31 +41,64 @@ const buyerSide = flag('buyer', cmd === 'list' ? 'claude' : undefined);
 if (!cmd || !['list', 'run'].includes(cmd) || !buyerSide || !['claude', 'deepseek', 'scripted'].includes(buyerSide)) { console.error('usage: run.ts list|run --buyer claude|deepseek|scripted [--scenario 1,2] [--out <dir>] [--period <s>]'); process.exit(2); }
 const picked = (flag('scenario') ?? SCENARIOS.map((s) => s.n).join(',')).split(',').map(Number);
 const scenarios = SCENARIOS.filter((s) => picked.includes(s.n));
-const CAPS = { turns: Number(flag('max-turns', '25')), tokens: Number(flag('max-tokens', '300000')) };
+// Caps per session: the one measured live buyer (the duet's paid baseline, 2026-11-12: 388,270 tokens, 18 turns) times
+// 1.5. They stop a runaway session; the batch budget below is what bounds the money.
+const CAPS = { turns: Number(flag('max-turns', '30')), tokens: Number(flag('max-tokens', '600000')) };
 const vendor = buyerSide === 'claude' ? 'anthropic' : buyerSide === 'deepseek' ? 'deepseek' : null;
-const model = vendor ? duet.providers.pinnedModel(vendor, flag('model')) : null;
-/** Purchases each scenario makes with the model, for the ceiling: scenarios.ts, counted by hand. */
+/**
+ * Models this runner may pin besides the duet registry's (config/judges-live.yaml, the judges' own file, which this test
+ * does not change): the vendor's small model, pinned here by the date it was pinned. Prices: config/model-prices.json.
+ */
+const LOCAL_PINS: Record<string, { id: string; provider: string; model: string }> = { 'claude-haiku-5-5': { id: 'claude-haiku-5-5', provider: 'anthropic', model: 'claude-haiku-5-5@2026-11-19' } };
+const priceAs = flag('price-as'); // dry runs of the budget guard: the scripted buyer priced as this model
+const model = !vendor && priceAs ? { id: priceAs, provider: 'scripted', model: 'scripted' } : vendor ? (flag('model') && Object.hasOwn(LOCAL_PINS, flag('model')!) ? LOCAL_PINS[flag('model')!]! : duet.providers.pinnedModel(vendor, flag('model'))) : null;
+/** Purchases each scenario makes with the model: scenarios.ts, counted by hand. */
 const SESSIONS: Record<number, number> = { 1: 1, 2: 1, 3: 4, 4: 2, 5: 2, 6: 2, 7: 1, 8: 2, 9: 2, 10: 1 };
 const sessions = scenarios.reduce((n, s) => n + (SESSIONS[s.n] ?? 1), 0);
-const ceilingPerSession = model ? (() => { const p = duet.measures.inputPrice(model.id); return p ? Math.round((CAPS.tokens * p.input + CAPS.turns * duet.providers.MAX_OUTPUT_TOKENS * p.output) / 1_000_000) : 0; })() : 0;
 const usd = (micro: number) => `USD ${(micro / 1e6).toFixed(2)}`;
+/**
+ * The batch's hard budget, in micro-USD at list prices: the ceiling. Before every model turn the runner adds the most
+ * that turn can cost (its whole input at the dearest input price, plus the full output cap) to what the batch has spent
+ * by the vendor's own usage counts; a turn that could pass the budget is not sent, the session ends, and the scenarios
+ * left are recorded as not run.
+ */
+const BUDGET = Math.round(Number(flag('budget-usd', '0')) * 1e6);
+if ((vendor || priceAs) && !(BUDGET > 0)) { console.error('a live run needs --budget-usd <USD>: the most the whole batch may cost at list prices'); process.exit(2); }
+const price = model ? duet.measures.inputPrice(model.id) : null;
+if ((vendor || priceAs) && !price) { console.error(`${model!.id} has no price in config/model-prices.json: nothing was sent`); process.exit(2); }
 
 const plan = [
   `Crest two-model test, stage 1 (local chain, test tokens): ${scenarios.length} scenarios, ${sessions} agent sessions.`,
   `  buyer  ${buyerSide === 'scripted' ? 'scripted (no model, no key)' : `${vendor} ${model!.model}, key ${duet.providers.KEY_ENV[vendor!]}`}`,
   `  caps   ${CAPS.turns} turns and ${CAPS.tokens.toLocaleString('en-US')} tokens per session, ${duet.providers.MAX_OUTPUT_TOKENS} output tokens per turn`,
-  `  cost   at most ${usd(ceilingPerSession)} per session and ${usd(ceilingPerSession * sessions)} for the batch at list prices (config/model-prices.json): each session's token cap at its dearest input price plus every turn's output cap; the loop stops before a turn that would pass the token cap`,
+  `  cost   at most ${vendor || priceAs ? usd(BUDGET) : 'USD 0.00'} for the whole batch at list prices (config/model-prices.json): a hard budget; no turn is sent that could pass it`,
 ];
 console.log(plan.join('\n'));
 if (cmd === 'list') process.exit(0);
 
+let spent = 0;
+let budgetHit = '';
 let provider: J = null;
 if (vendor) {
   const p = duet.providers.liveProvider(vendor, model!.model, process.env);
   if (typeof p === 'string') { console.error(p); process.exit(2); }
-  provider = p;
+  // The budget guard: the most the next turn can cost, before it is sent; what it did cost, after, from the vendor's counts.
+  provider = guard(p);
   console.log('Starting in 10 s. Stop with Ctrl-C.');
   await new Promise((r) => setTimeout(r, 10_000));
+}
+function guard(p: J): J {
+  return {
+    ...p,
+    async turn(system: string, history: J[], tools: J[], signal: AbortSignal) {
+      const input = Math.ceil((system.length + JSON.stringify(history).length + JSON.stringify(tools).length) / 3);
+      const worst = Math.ceil((input * price!.input + duet.providers.MAX_OUTPUT_TOKENS * price!.output) / 1_000_000);
+      if (spent + worst > BUDGET) { budgetHit = `the batch budget of ${usd(BUDGET)}: ${usd(spent)} spent, and the next turn could cost up to ${usd(worst)}`; throw new Error(`not sent: ${budgetHit}`); }
+      const a = await p.turn(system, history, tools, signal);
+      spent += duet.measures.priceOf(model!.id, a.usage) ?? 0;
+      return a;
+    },
+  };
 }
 const modelKeys = [duet.providers.KEY_ENV.anthropic, duet.providers.KEY_ENV.deepseek, ...duet.providers.JUDGE_KEY_ENV].map((k) => process.env[k]).filter(Boolean) as string[];
 
@@ -101,6 +134,7 @@ try {
   log(`World ready: chain ${w.chainId}, operators ${w.operators.join(' ')}, seller ${w.seller.base}, one purchase holds ${H} base units.`);
 
   for (const s of scenarios) {
+    if (budgetHit) { log(`Scenario ${s.n}: not run: ${budgetHit}.`); rows.push({ scenario: s.n, name: s.name, title: s.title, expect: s.expect, model: model?.id ?? 'scripted', crest: crestCommit, matched: false, notRun: budgetHit, checks: [], sessions: [] }); continue; }
     log(`Scenario ${s.n}: ${s.title}. Expected: ${s.expect}.`);
     rows.push(...(await runScenario(s)));
     writeFileSync(join(out, 'results.json'), `${JSON.stringify(rows, null, 2)}\n`);
@@ -217,7 +251,7 @@ try {
       });
       const facts = { quote: w.seller.quote, defaults: w.seller.defaults, sellerPage, rows: 5, budget: policy.budget, page: `${webUrl}/pay-through-a-vault.txt`, guide: `${webUrl}/llms.txt`, buy: `${webUrl}/buy.txt` };
       const brief = briefOf(facts, o.brief === 'urgent', o.agent === 'sub');
-      const prov = provider ?? duet.providers.scripted(scriptFor(facts));
+      const prov = provider ?? (priceAs ? guard(duet.providers.scripted(scriptFor(facts))) : duet.providers.scripted(scriptFor(facts)));
       rec.add('runner', 'session.start', { label, agent: who.address, vault });
       const end = await duet.loop.runAgent({ role: 'buyer', provider: prov, brief, tools, caps: CAPS, rec, signal: stop.signal });
       clearTimeout(timer);
@@ -314,7 +348,8 @@ try {
   await w.close();
 }
 const matched = rows.filter((r) => r.matched).length;
-log(`Done: ${matched} of ${rows.length} scenarios matched their expectation. Results: ${join(out, 'results.json')}`);
+writeFileSync(join(out, 'results.json'), `${JSON.stringify(rows, null, 2)}\n`);
+log(`Done: ${matched} of ${rows.length} scenarios matched their expectation. Spent ${usd(spent)} of a ${usd(BUDGET)} budget at list prices${budgetHit ? ` (stopped by ${budgetHit})` : ''}. Results: ${join(out, 'results.json')}`);
 process.exit(matched === rows.length ? 0 : 1);
 
 /** The company's brief: the intent, its limits and facts about its setup. It names Crow's guides and the vault page. */
