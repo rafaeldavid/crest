@@ -18,6 +18,7 @@ import { holdbackRoot, viem, type J } from '../holdback.ts';
 import { MAX128, OPEN, Principal, VAULT_ABI, type Caps } from './principal.ts';
 import { BUYER, SCENARIOS, type Check, type Ctx, type Scenario } from './scenarios.ts';
 import { GAS_HELPER, startWorld, type LocalWorld } from './world.ts';
+import { startSepolia } from './world-sepolia.ts';
 
 const root = holdbackRoot();
 const load = (p: string): Promise<J> => import(pathToFileURL(join(root, p)).href);
@@ -39,7 +40,8 @@ const flag = (n: string, d?: string) => { const i = argv.indexOf(`--${n}`); retu
 const cmd = argv[0];
 const buyerSide = flag('buyer', cmd === 'list' ? 'claude' : undefined);
 if (!cmd || !['list', 'run'].includes(cmd) || !buyerSide || !['claude', 'deepseek', 'scripted'].includes(buyerSide)) { console.error('usage: run.ts list|run --buyer claude|deepseek|scripted [--scenario 1,2] [--out <dir>] [--period <s>]'); process.exit(2); }
-const picked = (flag('scenario') ?? SCENARIOS.map((s) => s.n).join(',')).split(',').map(Number);
+const SEPOLIA_WORLD = flag('world') === 'sepolia';
+const picked = (flag('scenario') ?? (SEPOLIA_WORLD ? '1,2,5,6' : SCENARIOS.map((s) => s.n).join(','))).split(',').map(Number);
 const scenarios = SCENARIOS.filter((s) => picked.includes(s.n));
 // Caps per session: the one measured live buyer (the duet's paid baseline, 2026-11-12: 388,270 tokens, 18 turns) times
 // 1.5. They stop a runaway session; the batch budget below is what bounds the money.
@@ -122,11 +124,14 @@ mkdirSync(out, { recursive: true });
 const log = (l: string) => { console.log(l); writeFileSync(join(out, 'run.log'), `${new Date().toISOString()} ${l}\n`, { flag: 'a' }); };
 
 const v = await viem();
-const w: LocalWorld = await startWorld({ log });
+// Stage 2 runs against Crow's live service on Sepolia: --world sepolia --keys <principal and gas keys file> --crest <Crest's deployment record>.
+const w: LocalWorld = SEPOLIA_WORLD ? await startSepolia({ keys: flag('keys') ?? '', crestRecord: flag('crest') ?? '', log }) : await startWorld({ log });
+const gasKey = w.gasKey ?? GAS_HELPER;
 const rows: J[] = [];
 try {
   // The local web: Crow's guides as the site publishes them (with this world's operators), the home page, and the draft vault page.
-  const docs = await duet.world.localGuide(w.operators);
+  // On Sepolia the agents read Crow's live guides; only the draft vault page is served from here.
+  const docs = SEPOLIA_WORLD ? { home: '', guide: '', pages: {} as Record<string, string>, notFound: 'not found' } : await duet.world.localGuide(w.operators);
   const web: Server = createServer((req, res) => {
     const p = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname);
     const send = (s: number, t: string, b: string) => res.writeHead(s, { 'content-type': t }).end(b);
@@ -142,10 +147,11 @@ try {
   const webUrl = `http://127.0.0.1:${(web.address() as AddressInfo).port}`;
 
   // A probe quote: the hold one purchase costs (price plus the adjudication fee), as the offer states it.
-  const discovery = (await (await fetch(`${w.operators[0]}/.well-known/holdback.json`)).json()) as J;
-  const adj = discovery.demo.adjudicators.map((a: J) => String(a.address).toLowerCase()) as [string, string, string];
-  const defaults = (await (await fetch(w.seller.defaults)).json()) as J;
-  const H = await probeHold();
+  const probe = await probeHold();
+  const H = probe.H;
+  // The seller's payout address and the deal's three adjudicators, as the offer names them: the approved-merchant entry.
+  const adj = probe.adj;
+  w.seller.address ||= probe.payout;
   log(`World ready: chain ${w.chainId}, operators ${w.operators.join(' ')}, seller ${w.seller.base}, one purchase holds ${H} base units.`);
 
   for (const s of scenarios) {
@@ -156,7 +162,7 @@ try {
   }
   web.close();
 
-  async function probeHold(): Promise<bigint> {
+  async function probeHold(): Promise<{ H: bigint; payout: string; adj: [string, string, string] }> {
     const key = v.accounts.generatePrivateKey();
     const a = v.accounts.privateKeyToAccount(key).address.toLowerCase();
     const enc = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
@@ -167,7 +173,8 @@ try {
     if (!r.ok) throw new Error(`the probe quote failed: ${JSON.stringify(q)}`);
     const t = ((await (await fetch(`${w.operators[0]}/v1/commitments/${q.commitmentId}/terms`)).json()) as J);
     const terms = t.terms ?? t;
-    return BigInt(terms.price.amount) + BigInt(terms.adjudication.fee.amount);
+    const lc = (x: unknown) => String(x).toLowerCase();
+    return { H: BigInt(terms.price.amount) + BigInt(terms.adjudication.fee.amount), payout: lc(terms.sellerPayoutAddress), adj: [lc(terms.adjudication.adjudicator), lc(terms.adjudication.fallbackAdjudicator), lc(terms.adjudication.appealAdjudicator)] };
   }
 
   async function runScenario(s: Scenario): Promise<J[]> {
@@ -181,6 +188,7 @@ try {
     const sessionRows: J[] = [];
     const principal = await Principal.open(w);
     secrets.add(principal.key);
+    secrets.add(gasKey);
     const agentOf = (name: string) => {
       const key = v.accounts.generatePrivateKey();
       const encryptionSecretKey = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
@@ -197,9 +205,9 @@ try {
     const grant = await principal.grant(agent.address, grantCaps as Caps, { why: `scenario ${s.n}` });
     if (allowMerchant && grantCaps.list === 'default') await principal.allow(grant, merchant, 'Crow test seller with the demo adjudicators');
     await principal.fund(20n * H);
-    rec.add('runner', 'scenario.start', { n: s.n, name: s.name, title: s.title, expect: s.expect, vault: principal.vault, principal: principal.address, agent: agent.address, grant: grant.toString(), caps: JSON.parse(JSON.stringify(grantCaps, (_k, x) => (typeof x === 'bigint' ? x.toString() : x))), hold: H.toString(), buyerIs: BUYER, crest: crestCommit, buyer: buyerSide, model: model?.id ?? 'scripted', world: { engine: `anvil (chain ${w.chainId}) with Holdback's contracts, the operators' own code, Crow's test seller`, operators: w.operators, rules: w.rules, factory: w.factory, module: w.module } });
+    rec.add('runner', 'scenario.start', { n: s.n, name: s.name, title: s.title, expect: s.expect, vault: principal.vault, principal: principal.address, agent: agent.address, grant: grant.toString(), caps: JSON.parse(JSON.stringify(grantCaps, (_k, x) => (typeof x === 'bigint' ? x.toString() : x))), hold: H.toString(), buyerIs: BUYER, crest: crestCommit, buyer: buyerSide, model: model?.id ?? 'scripted', world: { engine: SEPOLIA_WORLD ? `Ethereum Sepolia, a public test network (chain 11155111): Crow's live operators and test seller` : `anvil (chain ${w.chainId}) with Holdback's contracts, the operators' own code, Crow's test seller`, operators: w.operators, rules: w.rules, factory: w.factory, module: w.module } });
 
-    const envFor = (who: { file: string; store: string }, vault: string) => ({ HOLDBACK_ROOT: root, HOLDBACK_DEPLOYMENT: w.deploymentJson, CREST_RPC: w.rpc, CREST_VAULT: vault, CREST_MODULE: w.module, CREST_KEY_FILE: who.file, CREST_STORE: who.store, CREST_GAS_KEY: GAS_HELPER, CREST_BUYER: BUYER });
+    const envFor = (who: { file: string; store: string }, vault: string) => ({ HOLDBACK_ROOT: root, HOLDBACK_DEPLOYMENT: w.deploymentJson, CREST_RPC: w.rpc, CREST_VAULT: vault, CREST_MODULE: w.module, CREST_KEY_FILE: who.file, CREST_STORE: who.store, CREST_GAS_KEY: gasKey, CREST_BUYER: BUYER });
     const policy = { budget: (5n * H).toString(), requiredChecks: [], checkBodies: {}, latestDeliverySec: 7200, decisionSlackSec: 1800, createdAtBandSec: 600 };
     const shownIn = (store: string, id: string): J => {
       for (const d of (() => { try { return readdirSync(store); } catch { return []; } })()) {
@@ -229,11 +237,11 @@ try {
       ];
       const tools = new duet.tools.Toolbox({
         role: 'buyer', work: paths.work, owner: paths.company, repo: root, operators: w.operators, allow, secrets, rec, policy, signal: stop.signal,
-        timeoutMs: { short: 180_000, long: 600_000 }, alias: { from: CROW_SITE, to: webUrl },
+        timeoutMs: { short: 180_000, long: 600_000 }, ...(SEPOLIA_WORLD ? {} : { alias: { from: CROW_SITE, to: webUrl } }),
         installed: {
           repository: ['check-delivery', 'deal-record'],
           env: (({ CREST_GAS_KEY: _g, ...plain }) => plain)(envFor(who, vault)),
-          secretEnv: { CREST_GAS_KEY: GAS_HELPER },
+          secretEnv: { CREST_GAS_KEY: gasKey },
           commands: {
             'vault-buy': {
               script: VAULT_BUY,
@@ -266,7 +274,7 @@ try {
           },
         },
       });
-      const facts = { quote: w.seller.quote, defaults: w.seller.defaults, sellerPage, rows: 5, budget: policy.budget, page: `${webUrl}/pay-through-a-vault.txt`, guide: `${webUrl}/llms.txt`, buy: `${webUrl}/buy.txt` };
+      const facts = { quote: w.seller.quote, defaults: w.seller.defaults, sellerPage, rows: 5, budget: policy.budget, page: `${webUrl}/pay-through-a-vault.txt`, guide: SEPOLIA_WORLD ? `${CROW_SITE}/llms.txt` : `${webUrl}/llms.txt`, buy: SEPOLIA_WORLD ? `${CROW_SITE}/buy.txt` : `${webUrl}/buy.txt` };
       const brief = briefOf(facts, o.brief === 'urgent', o.agent === 'sub');
       const prov = provider ?? (priceAs ? guard(duet.providers.scripted(scriptFor(facts))) : duet.providers.scripted(scriptFor(facts)));
       rec.add('runner', 'session.start', { label, agent: who.address, vault });

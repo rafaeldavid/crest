@@ -35,6 +35,9 @@ export interface LocalWorld {
   module: string;
   /** Crest's default approved-seller list (since Crest PR 9). */
   allowList: string;
+  /** Sepolia only: the long-lived principal and gas-helper keys; a local world makes its own. */
+  principalKey?: string;
+  gasKey?: string;
   seller: { base: string; quote: string; defaults: string; address: string; hold(on: boolean): void };
   /** Test ETH for an address, on anvil only. */
   fundEth(address: string): Promise<void>;

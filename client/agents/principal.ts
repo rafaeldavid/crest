@@ -31,7 +31,7 @@ export class Principal {
 
   static async open(w: LocalWorld): Promise<Principal> {
     const v = await viem();
-    const key = v.accounts.generatePrivateKey();
+    const key = w.principalKey ?? v.accounts.generatePrivateKey();
     const p = new Principal(w, key, v.accounts.privateKeyToAccount(key).address.toLowerCase());
     await w.fundEth(p.address);
     const r = await w.send(key, w.factory, FACTORY_ABI, 'create', [p.address, w.token, salt()]);
