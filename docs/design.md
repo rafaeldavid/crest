@@ -52,9 +52,10 @@ A second venue is a second module; the vault does not change.
 - **Every payment charges the grant and every grant above it,** checking each one's state, expiry, limits and list, and adding to each one's counters. One refusal reverts the payment, and nothing is counted.
 - **A child granted wider limits than its parent is still bound** by the parent at payment time, so the vault never compares limits when a grant is made.
 - **Who may do what.** The principal withdraws, enables modules, hands the vault over and acts on any grant. A controller above a grant may pause, resume or close it, set its limits and list its counterparties. A grant's own controller may pause or close itself and, when allowed, grant children and create and fill child vaults; it may never widen, resume or reopen its own grant.
+- **Delegating asks the whole path.** Granting, creating a child vault and filling one each need every grant on the path, here and in every ancestor vault, to be open, unexpired and allowed to delegate. That holds for the grant's own controller and for authority above it, so turning an agent's delegation off stops all delegating at or below it, through its sub-agents and inside its child vaults. Only the top principal grants without it.
 - **A pause has no rank.** Anyone above a paused grant can lift the pause, so a principal who distrusts an agent pauses the agent's own grant, which stops everything below it; the agent cannot lift that.
-- **A key holds one grant per vault, and closing a grant frees its key.** A closed grant's controller has no authority, and delegating needs an open path, so a closed agent cannot act through its sub-agents. A handover closes any grant the new principal's key held, so no agent can block it by giving that key a grant first.
-- **A new period length keeps the current window's spend,** so changing a limit's period never hands the agent a fresh window.
+- **A key holds one grant per vault, and closing a grant frees its key.** A closed grant's controller has no authority, and delegating needs an open path, so a closed agent cannot act through its sub-agents. A handover closes any grant the new principal's key held, so no agent can block it by giving that key a grant first. In the same way, authority above a key's grant may grant that key anew, and the old grant closes in that transaction, so no agent can hold a key the principal is granting.
+- **A new period length keeps the spend of the last window paid in when that window overlaps the new current one,** so changing a limit's period never hands the agent a fresh window. The vault keeps one window's counter, not a history, so a longer period knows only that last window (open, for the maintainer).
 - **Every change carries who made it and a note.** Each function a principal or a controller calls takes a `note`, and its event carries it with the caller: a reason, a ticket, or the hash of a document kept elsewhere. Limits changes also carry the previous limits. The note is public, so a reason meant to stay private goes in as a hash.
 - **Periods are fixed windows** (`floor(time / period)`), with no carry-over. A refund does not give a period's limit back: the counters are gross, and the refunded money returns to the vault.
 - **Open commitments are counted, not their total.** The total at risk is already bounded by the count times the per-payment limit. The module that opened a commitment releases it when the venue says it has ended; anyone may ask it to.
@@ -66,7 +67,7 @@ A second venue is a second module; the vault does not change.
 - **Bound from above:** each payment from a child is checked against the parent grant's path for its state, expiry, per-payment limit and approved counterparties, through the whole chain of parents. A stop anywhere above stops the child at once.
 - **Modules come from the top:** a child pays only through modules enabled at the top vault, to the payees pinned there. A child's principal cannot enable a module.
 - **Money goes back up only:** a child sends money to its parent vault and nowhere else. Its principal, and anyone with authority over the parent grant, can send it back.
-- **The child's root extends the parent grant:** only authority strictly above the parent grant can widen, resume or reopen it; the grant's controller manages everything below it. Filling a child needs the parent grant's right to delegate and an unpaused path above it.
+- **The child's root extends the parent grant:** only authority strictly above the parent grant can widen, resume or reopen it; the grant's controller manages everything below it. Filling a child, like creating one, needs every grant on the path above it to be open and allowed to delegate.
 - **No handover strands a child:** a child vault cannot be handed over, and a top vault's root creates no child, so a change of principal never leaves a child with the previous one.
 
 ### 4. Payments
@@ -95,6 +96,23 @@ No principal, controller, module or factory can stop a funded deal from settling
 ### 8. Measured on the first build
 
 - `forge test` on Holdback's own test world and its unchanged rules contract: an attack test for each control in section 9, refused by name; five invariants over random payments through a tree (no grant passes its total, period or open limit; every level counts what passes through it; money leaves only to the pinned payee); a fuzz test that the approved digest equals the collector's for any terms; and a selector allowlist [measured, 2026-11-19]. One review and one red-team pass found three child-vault authority gaps, a handover an agent could block, a period change that opened a fresh window, and missing attack tests; each is fixed and covered by a test. A re-review killed 11 of 13 one-line mutations with the PR's own tests and 2 more with its own. It found one regression, a principal that handed the vault to itself closing its root, now fixed and tested. The red team's 29 attacks, the review's 24 tests, the re-review's 9, the deploy script's 8 and the build's own tests pass together: 145 of 145, with the three fork suites skipped without an RPC [measured, 2026-11-19].
+- A cross-check against the published audits of comparable systems and Holdback's own audit work sorted 113 vulnerability classes [measured, 2026-11-19]:
+  - 82 covered by a test;
+  - 20 not applicable;
+  - 5 residual: inherent or documented limits with no test;
+  - 6 gaps, from 3 distinct findings.
+
+  None let money past a limit or touch a funded hold. The three findings:
+  - delegation turned off did not stop an agent delegating through its sub-agent (Medium);
+  - a longer period forgot spend inside the new window (Low);
+  - an agent could take a key the principal was about to grant (Low).
+
+  Each is fixed, and the cross-check's attack tests, which failed before, pass since. One case of the period finding stays open for the maintainer (section 2). Its coverage tests add:
+  - the vault never approves a transfer, cancel or permit digest during a charge;
+  - no SELFDESTRUCT, CALLCODE or DELEGATECALL in the vault, the factory or the module;
+  - a vault is exactly the library's minimal proxy;
+  - zero addresses are refused;
+  - a fork test through Circle's USDC on Sepolia.
 - The deploy script on a fork of Sepolia, against Holdback's live rules contract, escrow, collector and tUSDC: it deploys at the CREATE2 addresses its code gives and checks itself; one deal inside the caps ends Released, and one above the per-deal cap is refused. At this repository's commit `d361715` the factory's transaction costs 3,168,775 gas, vault implementation included, and the module's 1,446,305 gas [measured, 2026-11-19].
 - The chain the script deploys to is the one the RPC answers. Forge 1.0.0 simulates a script with `block.chainid` 31337 from `foundry.toml` whatever the RPC, and signs for the chain the RPC answers, so a check on `block.chainid` alone would pass on mainnet [measured, 2026-11-19; the signing side was measured by Holdback's red team for T-410]. Every public path of the script reads the RPC's chain, and against an RPC that answers chain ID 1, `run`, `deploy` and `verify` each refuse before anything is sent [measured]. A review of the first fix found a direct `deploy` call that took the chain as an argument, a record written in the simulation before anything was sent, and two fork suites racing on a shared environment variable. Each is fixed and tested. The record is now written only by `verify`, which checks the contracts the chain holds. On Sepolia the rules contract comes from Holdback's own record at the pinned commit. A rerun deploys nothing twice.
 - Static analysis: Slither and Aderyn report no finding of High impact that holds on reading; their ordering and unused-return findings are fixed [measured].
@@ -126,5 +144,10 @@ A research pass on 2026-11-19 read the agent identity and reputation standards: 
 9. **Identity notes:** whether to fix a format for identity in a note now (for example a CAIP-19 identifier for an ERC-8004 agent) or when a principal asks.
 10. **An identity-following merchant list:** whether an opt-in module may ever approve merchants by agent identity, given that one outside key controls the registries.
 11. **Controller keys:** guidance on a long-lived public key per agent against a fresh key per deal or session.
+12. **A longer period after spend on several days:** the vault keeps one window's counter, so lengthening a daily limit to a weekly one counts only the last day paid in. After 3 holds on each of two days, a weekly limit of 6 lets 3 more through: 9 in the week (`test_observe_lengthenThePeriodAfterTwoDaysOfSpend_countsOnlyTheLastDay`). There are two ways to close it:
+    - document it: set a lower limit for the rest of the week, or pause first;
+    - carry conservatively: count the whole lifetime spend since the new window began, which needs a history the vault does not keep.
+
+    Documenting it is recommended.
 
 The repository's visibility is settled: public since 2026-11-19, with secret scanning, push protection, private vulnerability reporting, and a rule on `main` that takes changes only by pull request with both checks passing.
