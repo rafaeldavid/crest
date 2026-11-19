@@ -55,7 +55,7 @@ A second venue is a second module; the vault does not change.
 - **Delegating asks the whole path.** Granting, creating a child vault and filling one each need every grant on the path, here and in every ancestor vault, to be open, unexpired and allowed to delegate. That holds for the grant's own controller and for authority above it, so turning an agent's delegation off stops all delegating at or below it, through its sub-agents and inside its child vaults. Only the top principal grants without it.
 - **A pause has no rank.** Anyone above a paused grant can lift the pause, so a principal who distrusts an agent pauses the agent's own grant, which stops everything below it; the agent cannot lift that.
 - **A key holds one grant per vault, and closing a grant frees its key.** A closed grant's controller has no authority, and delegating needs an open path, so a closed agent cannot act through its sub-agents. A handover closes any grant the new principal's key held, so no agent can block it by giving that key a grant first. In the same way, authority above a key's grant may grant that key anew, and the old grant closes in that transaction, so no agent can hold a key the principal is granting.
-- **A window counts until its end time,** so changing a limit's period never hands the agent a fresh window. A grant keeps the end time of the window it last paid in, and its spend counts in any current window that starts before that end. A new period length only moves the end back to the end of the new current window; it never zeroes the counter, so the spend survives any number of changes. The vault keeps one window's counter, not a history, so a longer period knows only that last window (open item 11).
+- **A window counts until its end time,** so changing a limit's period never hands the agent a fresh window. A grant keeps the end time of the window it last paid in, and its spend counts in any current window that starts before that end. A new period length only moves the end back to the end of the new current window; it never zeroes the counter, so the spend survives any number of changes. The vault keeps one window's counter, not a history, so a longer period knows only that last window (open item 12).
 - **Every change carries who made it and a note.** Each function a principal or a controller calls takes a `note`, and its event carries it with the caller: a reason, a ticket, or the hash of a document kept elsewhere. Limits changes also carry the previous limits. The note is public, so a reason meant to stay private goes in as a hash.
 - **Periods are fixed windows** (`floor(time / period)`), with no carry-over. A refund does not give a period's limit back: the counters are gross, and the refunded money returns to the vault.
 - **Open commitments are counted, not their total.** The total at risk is already bounded by the count times the per-payment limit. The module that opened a commitment releases it when the venue says it has ended; anyone may ask it to.
@@ -107,7 +107,7 @@ No principal, controller, module or factory can stop a funded deal from settling
   - a longer period forgot spend inside the new window (Low);
   - an agent could take a key the principal was about to grant (Low).
 
-  Each is fixed, and the cross-check's attack tests, which failed before, pass since. One case of the period finding stays open for the maintainer (open item 11). Its coverage tests add:
+  Each is fixed, and the cross-check's attack tests, which failed before, pass since. One case of the period finding stays open for the maintainer (open item 12). Its coverage tests add:
   - the vault never approves a transfer, cancel or permit digest during a charge;
   - no SELFDESTRUCT, CALLCODE or DELEGATECALL in the vault, the factory or the module;
   - a vault is exactly the library's minimal proxy;
@@ -197,7 +197,7 @@ The three conditions for a Holdback buyer message:
 9. A sibling sub-agent signs for another sub-agent's child vault.
 
 **What Holdback's operators and adjudicator must change.** None of this is Crest's code.
-- **Who carries it.** Holdback's T-549 carries it in schema v0.12 and its two pull requests: the buyer's fields in the schema one, the buyer's checks in the settlement one. It adds them on the maintainer's yes on Holdback's record (D84).
+- **Who carries it.** Holdback's T-549 carries it in schema v0.12 and its two pull requests: the buyer's fields in the schema one, the buyer's checks in the settlement one. The maintainer said yes on 2026-11-19, so T-549 adds them after T-548 merges.
 - **The pinned bundles.** `site/buy.mjs` and `site/try.mjs` stay pinned by hash, so their ECDSA path stays byte-identical. A vault buyer signs through Crest's own tooling or a new command.
 
 The changes:
@@ -332,7 +332,7 @@ Scope: the default list contract and its interface are new files, so the outside
 - **A trademark search for the name:** "go ahead and check". A first desk search is running and kept privately. A lawyer's opinion comes after it and is the maintainer's to ask for.
 - **Building order:** the vault as the buyer, the external list and the fee are built after the first stage of the two-model test (T-560), which keeps running on what is merged.
 
-### 17. Limits for a sub-agent by a signature alone (evaluated for the maintainer; not built)
+### 17. Limits for a sub-agent by a signature alone (decided 2026-11-19; shape (a) built)
 
 The maintainer: "Does this require code change for crest? Feels like something quite useful. Evaluate it, if it can be done we might as well do now". It needs a code change in the vault. Two shapes were compared.
 
@@ -346,13 +346,13 @@ The maintainer: "Does this require code change for crest? Feels like something q
   - The signed data is bound to one vault and one chain by the vault's EIP-712 domain: the name, version, chain ID and the vault's address.
   - The grant's ID is `keccak256(parent, key, salt)`. Once created it stays taken, even after the grant closes, so the same signature never creates a second grant. No separate nonce is needed.
   - The deadline ends the signature's use.
-  - The signer's key is checked by ECDSA, or by ERC-1271 if it is a contract.
+  - The signer's key is checked by ECDSA. The evaluation also weighed ERC-1271 for a contract signer; the build takes ECDSA only (below).
 - **Revocation.**
   - Before first use, three things stop it:
     - the deadline passes;
     - the signer loses its authority;
     - its path is paused or closed, or may no longer delegate.
-  - An explicit cancel would need about 6 more lines: a closed record under the same ID. It is optional; short deadlines are recommended instead.
+  - An explicit cancel takes the ID out of use with a closed record. The build has it (`cancelSignedGrant`, below), as well as the deadline.
   - After first use it is an ordinary grant: pause it, close it, or stop anything above it.
 - **A parent's stop.** Submitting checks the whole path at that moment, so a signed grant below a stopped parent cannot land. Once landed, the parent's stop stops it at every payment, as it stops any grant.
 - **Size.** About 30 new lines in `CrestVault.sol` and 12 in `ICrestVault.sol` [inferred]:
@@ -390,30 +390,57 @@ The maintainer: "Does this require code change for crest? Feels like something q
 - a signer that lost its authority between signing and submission;
 - limits, key, parent or salt changed after signing;
 - a key that holds a grant elsewhere, when the signer is not above that grant;
-- a malleable signature, which yields the same ID and is refused as a replay.
+- a malleable signature, refused outright: the build takes a low `s` only.
 
 **Recommendation:** build (a) in the next build, with the vault as the buyer, the fee and the external list, after the first stage of the two-model test (T-560).
+
+**Decided and built.** The maintainer, after the design and a question about a leaked signature: "Ok that looks good then implement". Shape (a) only. The fee and the external list still wait for his word.
+
+What was built (`grantBySig`, `cancelSignedGrant`, `SignedGrant`):
+- **What is signed.** `SignedGrant(parent, controller, caps, salt, counterparties, deadline, note)`, under the vault's EIP-712 domain: name "Crest", version "1", the chain ID and the vault's address. So every limit, the starting allow list, the note and the deadline are signed, and so are the vault and the chain.
+- **Who may sign.** Exactly who may call `grant` for that parent. The vault recovers the signer and runs `grant`'s checks with it in the caller's place, at submission. A slip from a key without authority, from a closed grant's key, or from a path that is paused, expired or may not delegate is refused. A slip that landed before a stop gives an ordinary grant, which the stop reaches at every payment, as it reaches any grant.
+- **It is not a bearer instrument.** The slip names the key it grants. Whoever submits it gains nothing, and only that key can sign the deals the grant pays. A slip that leaks before use lets its holder do only what the signer already chose: land that grant for that key, once.
+- **Replay.** The grant's ID, `keccak256(parent, controller, salt)`, is taken once and stays taken, even after the grant closes, so a second submission is refused.
+- **Cancelling an unused slip.** `cancelSignedGrant(parent, controller, salt, note)` takes the slip's grant ID out of use. It writes a closed grant under that ID and emits `Closed`. Anyone who may sign for that parent may call it: the parent's controller and every authority above it, the principal included. A submission after it is refused with `GrantExists`. A slip also ends at its deadline. Once a slip is used, `close` ends its grant as usual.
+- **Signatures.** 65-byte ECDSA with a low `s` only. A malleable twin, a 64-byte compact form, an invalid `v` or any other length is refused with `BadGrantSignature`. A contract that controls a grant grants by transaction: the vault never asks it by ERC-1271. An EIP-7702 account still holds its key, so it signs as any key does.
+- **Only for a fresh key.** A slip lands only for a key that has never held a grant in the vault and has never been its principal. Closing a grant retires its key for slips, and so does a handover for the previous principal. So:
+  - an older slip can never replace a key's later grant or give it fresh counters;
+  - a spare slip, signed as a retry and kept back, can never restart a sub-agent the principal stopped, even after the sub-agent closes its own grant to free its key.
+
+  Granting a used key again, or moving a key between grants, takes a transaction by authority above its grant. Retiring a key costs about 22,100 gas on the close that frees it [inferred]. Slips therefore suit a fresh key per task or session.
+- **Who may cancel.** Anyone with authority over the existing parent grant, even while paused or unable to delegate, so a signer can always void its own slips. A cancel emits `Closed` with no `Granted` before it. It may take an ID that a later grant with the same salt would have used; another salt avoids it.
+- **Races.** A slip's holder can land it before a cancel lands, so short deadlines remain the first defence for a slip that might leak. A relayer that batches a slip with a first payment should let the slip's call fail without failing the batch, for a slip already landed or cancelled.
+- **Measured (2026-11-19).**
+  - **Gas, with one listed counterparty.** A signed grant costs 183,683 execution gas plus 5,800 calldata gas, in one transaction anyone sends. The same grant by transaction costs 151,868 plus 3,236. Its allow-list entry, as a second transaction, costs 28,646 plus 1,924, measured with warm storage. So with the 21,000 base of each transaction, a signed grant costs about 210,500 gas against about 227,700 for the controller's two transactions, and the controller sends none. A payment costs the same either way.
+  - **Lines.** `CrestVault.sol` went from 411 to 481 lines, and `ICrestVault.sol` from 274 to 307. The six contract files went from 943 to 1,046.
+  - **Review and red team.**
+    - The review found one Medium: an older slip could replace a key's later grant. It is fixed by the fresh-key rule.
+    - The red team tried 37 attacks. It found one Medium: a spare slip restarted a stopped sub-agent after the sub-agent closed its own grant. It also found one Low: renewals signed in advance all landed on the first day. Both are fixed by the same rule.
+    - The red team's exhaustive table and fuzz found no slip that lands where its signer's `grant` would not.
 
 ## Open, for the maintainer
 
 1. **The fee's design** (section 14): fixed at deployment in the vault implementation, taken only on a payment, rounded down, never on the hold. To accept or change before it is built.
 2. **The external merchant list's design** (section 15): one list contract per grant, set with the limits, asked read-only and gas-capped at every level. To accept or change before it is built.
-3. **Grants by signature** (section 17): shape (a) is recommended for the next build.
+3. **Grants by signature** (section 17): decided and built, shape (a).
 4. **Holdback's side of the vault as the buyer** (section 12):
-    - the maintainer's yes on Holdback's record (D84), so T-549's schema v0.12 carries the buyer's longer signature;
-    - his acceptance that a vault buyer narrows ADR-0038 point 4.
-5. **The name:** the first desk search found the name crowded in crypto and finance, with a close use in the same field. Until the maintainer decides, it spreads no further: no site page, package name, domain or announcement.
+    - **The schema change is decided (2026-11-19).** Holdback's schema v0.12 carries a contract buyer's longer signature, and its operators read a contract buyer, built by the standing-offers sessions in Holdback.
+      - To "Add a contract buyer, such as a Crest vault, to T-549's schema v0.12?" the maintainer said "Yes, add it".
+      - To "Should a vault that buys (a contract as the buyer) go into the same schema change as standing offers?" he said "Yes, same change".
+    - **The principal on a funded deal is decided (2026-11-19).** The maintainer: "1. A vault owner on a funded deal: Yes, the owner may". When the vault is the buyer, its principal may stop or replace its agent's signature on a deal already funded, such as accepting early or agreeing a settlement; the held money still moves only by the deal's terms. So the build of section 12 lets a stop reach the agent's signature on funded deals and lets the principal sign in its place, with no per-deal signer lock. It still comes after the first stage of the two-model test. Holdback's own record (D84 and ADR-0038 point 4) is the coordinator's to update.
+5. **The name:** the first desk search found the name crowded in crypto and finance, with a close use in the same field. The maintainer: "leave as is and we can sort in a second". So the name stays for now, undecided, and spreads no further: no site page, package name, domain or announcement.
 6. **Crow paying to create vaults on request:** a new request field or route; the relay of fundings is decided (section 13).
-7. **Depending on third-party code a single address can pause, or under copyleft or source-available licences:** none in the first version.
+7. **Other projects' contracts under Crest** (decided 2026-11-19). The maintainer: "3. Other projects' contracts under Crest: None in the first version". The first version is built on no outside contract that carries an off switch another party holds, or a licence that limits commercial use or forces the same licence. Each later case comes to him.
 8. **Deploys to Sepolia,** on the maintainer's word. They follow Holdback's redeploy of its rules contract (T-563), since the module is per rules deployment, and a bump of `lib/holdback` to the new record.
 9. **Identity notes:** whether to fix a format for identity in a note now (for example a CAIP-19 identifier for an ERC-8004 agent) or when a principal asks.
-10. **Controller keys:** guidance on a long-lived public key per agent against a fresh key per deal or session.
-11. **A longer period after spend on several days:** the vault keeps one window's counter, so lengthening a daily limit to a weekly one counts only the last day paid in. After 3 holds on each of two days, a weekly limit of 6 lets 3 more through: 9 in the week (`test_observe_lengthenThePeriodAfterTwoDaysOfSpend_countsOnlyTheLastDay`). There are two ways to close it:
+10. **Renewals by slip:** a slip signed in advance for later use would need a `validAfter` beside its deadline. Today a slip is usable from the moment it is signed, and a key takes only one. Whether renewals by slip are wanted is the maintainer's to decide. A per-signer nonce that voids all of a signer's slips at once was weighed against the fresh-key rule and is weaker, because the principal must remember to use it.
+11. **Controller keys:** guidance on a long-lived public key per agent against a fresh key per deal or session.
+12. **A longer period after spend on several days:** the vault keeps one window's counter, so lengthening a daily limit to a weekly one counts only the last day paid in. After 3 holds on each of two days, a weekly limit of 6 lets 3 more through: 9 in the week (`test_observe_lengthenThePeriodAfterTwoDaysOfSpend_countsOnlyTheLastDay`). There are two ways to close it:
     - document it: set a lower limit for the rest of the week, or pause first;
     - carry conservatively: count the whole lifetime spend since the new window began, which needs a history the vault does not keep.
 
     Documenting it is recommended.
-12. **The top principal below a grant that may not delegate:** today only its `grant` in the top vault skips the delegation walk. `createChild` and `fundChild` refuse it, and so does a grant inside a child vault. To fill an agent's child while the agent may not delegate, the principal turns delegation on, fills and turns it off, which leaves the agent a window unless the calls are batched. There are two choices:
+13. **The top principal below a grant that may not delegate:** today only its `grant` in the top vault skips the delegation walk. `createChild` and `fundChild` refuse it, and so does a grant inside a child vault. To fill an agent's child while the agent may not delegate, the principal turns delegation on, fills and turns it off, which leaves the agent a window unless the calls are batched. There are two choices:
     - keep it, fail-closed and as described;
     - exempt the top principal in `createChild` and `fundChild` too.
 

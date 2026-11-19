@@ -35,6 +35,12 @@ import {AuthCaptureEscrow} from "commerce-payments/AuthCaptureEscrow.sol";
 ///         the charged amount, with the module's deadline and nonce, for the rest of the transaction. It answers
 ///         ERC-1271 to the token only, and only for that digest, so no key's own signature ever moves the vault's money.
 ///
+///         Signed grants. Whoever may grant under a parent may instead sign a `SignedGrant` under this vault's EIP-712
+///         domain, which names the vault and the chain, and anyone may submit it with `grantBySig`. The vault checks it
+///         as `grant` checks its caller, at submission, and it lands as an ordinary grant for the key it names, so the
+///         submitter gains nothing and only that key can pay through it. It is used once: its grant ID stays taken.
+///         Before use, `cancelSignedGrant` voids it and its deadline ends it; after use, close the grant.
+///
 ///         Notes. Every change a principal or a controller makes takes a `note`, carried in its event as given: a
 ///         reason, a ticket, or the hash of a document kept elsewhere. It is public, so a principal that wants the
 ///         reason private puts a hash there.
@@ -79,6 +85,18 @@ interface ICrestVault {
         uint128 spent;
         uint40 windowEnd;
         uint32 open;
+    }
+
+    /// @notice A grant signed off chain: `grant`'s arguments, the counterparties its allow list starts with, and the last
+    ///         instant (unix seconds) it may be submitted.
+    struct SignedGrant {
+        uint256 parent;
+        address controller;
+        Caps caps;
+        bytes32 salt;
+        bytes32[] counterparties;
+        uint40 deadline;
+        bytes note;
     }
 
     /// @notice A commitment a module opened: which grant paid, how much, and which module may end it.
@@ -139,6 +157,9 @@ interface ICrestVault {
     error OverLifetime(uint256 grant);
     error TooManyOpen(uint256 grant);
     error CounterpartyNotAllowed(uint256 grant);
+    error BadGrantSignature();
+    error KeyNotFresh();
+    error SignedGrantExpired();
 
     // Setup
 
@@ -173,6 +194,18 @@ interface ICrestVault {
     function grant(uint256 parentId, address controller, Caps calldata caps, bytes32 salt, bytes calldata note)
         external
         returns (uint256 id);
+
+    /// @notice Lands `signed` as `grant` would for its signer, and lists its counterparties, by anyone until its
+    ///         deadline, for a fresh key: one that has never held a grant here, nor been this vault's principal. A key
+    ///         that held one is granted again, or moved, by transaction. `signature` is a 65-byte ECDSA signature with
+    ///         a low `s`: a contract controller grants by transaction.
+    /// @return id The new grant's ID.
+    function grantBySig(SignedGrant calldata signed, bytes calldata signature) external returns (uint256 id);
+
+    /// @notice Voids an unused signed grant by taking its ID, which then holds a closed grant, emitting `Closed` with no
+    ///         `Granted` before it. By anyone with authority over the existing grant `parentId`, even while paused or
+    ///         unable to delegate, so a signer can always void its own slips; another salt avoids an ID it takes.
+    function cancelSignedGrant(uint256 parentId, address controller, bytes32 salt, bytes calldata note) external;
 
     /// @notice Sets the limits of grant `id`. By anyone with authority above it.
     function setCaps(uint256 id, Caps calldata caps, bytes calldata note) external;

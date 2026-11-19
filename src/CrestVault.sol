@@ -2,6 +2,8 @@
 pragma solidity 0.8.28;
 
 import {AuthCaptureEscrow} from "commerce-payments/AuthCaptureEscrow.sol";
+import {ECDSA} from "solady/utils/ECDSA.sol";
+import {EIP712} from "solady/utils/EIP712.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 
 import {ICrestFactory} from "./ICrestFactory.sol";
@@ -13,10 +15,18 @@ interface IERC3009Domain {
 
 /// @title CrestVault
 /// @notice A principal's vault and its tree of grants. `ICrestVault` describes every function, event and error.
-contract CrestVault is ICrestVault {
+contract CrestVault is ICrestVault, EIP712 {
     uint256 public constant ROOT = 1;
     bytes32 internal constant RECEIVE_WITH_AUTHORIZATION_TYPEHASH =
         0xd099cc98ef71107a616c4f0f941f04c322d8e254fe26b3c6668db87aae413de8;
+    bytes32 internal constant CAPS_TYPEHASH = keccak256(
+        "Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool restricted,bool mayDelegate)"
+    );
+    bytes32 internal constant SIGNED_GRANT_TYPEHASH = keccak256(
+        "SignedGrant(uint256 parent,address controller,Caps caps,bytes32 salt,bytes32[] counterparties,uint40 deadline,bytes note)Caps(uint128 perSpend,uint128 perPeriod,uint128 lifetime,uint32 maxOpen,uint32 period,uint40 expiresAt,bool restricted,bool mayDelegate)"
+    );
+    /// The largest `s` of a non-malleable secp256k1 signature, `n / 2`.
+    uint256 internal constant HALF_N = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
     bytes4 internal constant ERC1271_MAGIC = 0x1626ba7e;
     bytes4 internal constant ERC1271_NO = 0xffffffff;
 
@@ -33,6 +43,8 @@ contract CrestVault is ICrestVault {
     mapping(uint256 id => mapping(bytes32 counterparty => bool)) public allowed;
     mapping(bytes32 commitment => Open) internal _opens;
     mapping(address module => address payee) internal _payees;
+    /// Keys whose grant here closed, and previous principals: a signed grant never names one.
+    mapping(address key => bool) internal _retired;
 
     constructor() {
         principal = address(1);
@@ -83,6 +95,7 @@ contract CrestVault is ICrestVault {
         }
         address previous = principal;
         delete grantOf[previous];
+        _retired[previous] = true;
         (principal, pendingPrincipal) = (proposed, address(0));
         _grants[ROOT].controller = proposed;
         grantOf[proposed] = ROOT;
@@ -110,25 +123,45 @@ contract CrestVault is ICrestVault {
         external
         returns (uint256 id)
     {
-        Grant storage p = _grants[parentId];
-        if (p.controller == address(0)) revert NoGrant();
-        if (!authorityOver(msg.sender, parentId)) revert NotAuthorized();
-        if (!_isTopPrincipal(msg.sender)) _requireDelegable(parentId);
-        if (p.closed) revert GrantClosed(parentId);
-        if (controller == address(0)) revert ZeroAddress();
-        _requireValid(caps);
-        id = uint256(keccak256(abi.encode(parentId, controller, salt)));
-        uint256 held = grantOf[controller];
-        if (id <= ROOT || _grants[id].controller != address(0) || held == ROOT) revert GrantExists();
-        if (held != 0) {
-            if (!_above(msg.sender, held)) revert GrantExists();
-            _grants[held].closed = true;
-            emit Closed(held, msg.sender, note);
+        return _grant(msg.sender, parentId, controller, caps, salt, note);
+    }
+
+    /// @inheritdoc ICrestVault
+    function grantBySig(SignedGrant calldata signed, bytes calldata signature) external returns (uint256 id) {
+        if (block.timestamp > signed.deadline) revert SignedGrantExpired();
+        if (signature.length != 65 || uint256(bytes32(signature[32:64])) > HALF_N) revert BadGrantSignature();
+        bytes32 structHash = keccak256(
+            abi.encode(
+                SIGNED_GRANT_TYPEHASH,
+                signed.parent,
+                signed.controller,
+                keccak256(abi.encode(CAPS_TYPEHASH, signed.caps)),
+                signed.salt,
+                keccak256(abi.encodePacked(signed.counterparties)),
+                signed.deadline,
+                keccak256(signed.note)
+            )
+        );
+        address signer = ECDSA.tryRecoverCalldata(_hashTypedData(structHash), signature);
+        if (signer == address(0)) revert BadGrantSignature();
+        if (grantOf[signed.controller] != 0 || _retired[signed.controller]) revert KeyNotFresh();
+        id = _grant(signer, signed.parent, signed.controller, signed.caps, signed.salt, signed.note);
+        for (uint256 i; i < signed.counterparties.length; ++i) {
+            allowed[id][signed.counterparties[i]] = true;
+            emit Allowed(id, signed.counterparties[i], true, signer, signed.note);
         }
+    }
+
+    /// @inheritdoc ICrestVault
+    function cancelSignedGrant(uint256 parentId, address controller, bytes32 salt, bytes calldata note) external {
+        _requireExists(parentId);
+        if (!authorityOver(msg.sender, parentId)) revert NotAuthorized();
+        if (controller == address(0)) revert ZeroAddress();
+        uint256 id = uint256(keccak256(abi.encode(parentId, controller, salt)));
         Grant storage g = _grants[id];
-        (g.parent, g.controller, g.caps) = (parentId, controller, caps);
-        grantOf[controller] = id;
-        emit Granted(id, parentId, controller, caps, msg.sender, note);
+        if (id <= ROOT || g.controller != address(0)) revert GrantExists();
+        (g.parent, g.controller, g.closed) = (parentId, controller, true);
+        emit Closed(id, msg.sender, note);
     }
 
     /// @inheritdoc ICrestVault
@@ -159,7 +192,10 @@ contract CrestVault is ICrestVault {
         _requireExists(id);
         if (msg.sender != g.controller && !_above(msg.sender, id)) revert NotAuthorized();
         g.closed = true;
-        if (id != ROOT && grantOf[g.controller] == id) delete grantOf[g.controller];
+        if (id != ROOT && grantOf[g.controller] == id) {
+            delete grantOf[g.controller];
+            _retired[g.controller] = true;
+        }
         emit Closed(id, msg.sender, note);
     }
 
@@ -333,6 +369,40 @@ contract CrestVault is ICrestVault {
     }
 
     // Internals
+
+    /// `grant`'s checks and effects, for the caller or, for a signed grant, its signer `by`.
+    function _grant(
+        address by,
+        uint256 parentId,
+        address controller,
+        Caps calldata caps,
+        bytes32 salt,
+        bytes calldata note
+    ) internal returns (uint256 id) {
+        Grant storage p = _grants[parentId];
+        if (p.controller == address(0)) revert NoGrant();
+        if (!authorityOver(by, parentId)) revert NotAuthorized();
+        if (!_isTopPrincipal(by)) _requireDelegable(parentId);
+        if (p.closed) revert GrantClosed(parentId);
+        if (controller == address(0)) revert ZeroAddress();
+        _requireValid(caps);
+        id = uint256(keccak256(abi.encode(parentId, controller, salt)));
+        uint256 held = grantOf[controller];
+        if (id <= ROOT || _grants[id].controller != address(0) || held == ROOT) revert GrantExists();
+        if (held != 0) {
+            if (!_above(by, held)) revert GrantExists();
+            _grants[held].closed = true;
+            emit Closed(held, by, note);
+        }
+        Grant storage g = _grants[id];
+        (g.parent, g.controller, g.caps) = (parentId, controller, caps);
+        grantOf[controller] = id;
+        emit Granted(id, parentId, controller, caps, by, note);
+    }
+
+    function _domainNameAndVersion() internal pure override returns (string memory, string memory) {
+        return ("Crest", "1");
+    }
 
     function _above(address who, uint256 id) internal view returns (bool) {
         if (who == address(0)) return false;
