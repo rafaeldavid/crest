@@ -1,0 +1,9 @@
+forge-std/=lib/holdback/contracts/lib/commerce-payments/lib/forge-std/src/
+solady/=lib/holdback/contracts/lib/commerce-payments/lib/solady/src/
+commerce-payments/=lib/holdback/contracts/lib/commerce-payments/src/
+commerce-payments-test/=lib/holdback/contracts/lib/commerce-payments/test/
+@openzeppelin/contracts/=lib/holdback/contracts/lib/commerce-payments/lib/spend-permissions/lib/openzeppelin-contracts/contracts/
+permit2/=lib/holdback/contracts/lib/commerce-payments/lib/permit2/src/
+holdback/=lib/holdback/contracts/src/
+holdback-test/=lib/holdback/contracts/test/
+holdback-script/=lib/holdback/contracts/script/

@@ -1,0 +1,2 @@
+# False positive: the constant SEPOLIA_TOKEN holds Holdback's public tUSDC address on Sepolia, typed address; not a secret.
+ff2ac24a42223890bebe3bb60502eeba691aa0fb:test/fork/SepoliaFork.t.sol:generic-api-key:20
