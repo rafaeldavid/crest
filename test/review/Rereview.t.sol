@@ -62,21 +62,16 @@ contract ReviewRereviewTest is CrestBase {
         assertEq(_grantOf(vault, next).spent, HOLD, "charged to the new grant, under the root");
     }
 
-    /// N4. Turning off the parent grant's right to delegate stops fills, but not grants inside an existing child: the
-    /// child's root keeps its own `mayDelegate`. The principal can clear it there too, and the agent cannot set it back.
-    function test_observe_mayDelegateOffAtTheParent_stillGrantsInsideTheChild_untilTheChildRootIsNarrowed() public {
+    /// N4. Turning off the parent grant's right to delegate stopped fills, but not grants inside an existing child. Since
+    /// the cross-check's X-M1 fix, delegating asks every grant on the path, ancestor vaults included, so it stops both.
+    /// The agent still cannot widen the child's root.
+    function test_attack_mayDelegateOffAtTheParent_stillGrantsInsideTheChild_refused() public {
         vm.prank(buyer);
         CrestVault child = CrestVault(vault.createChild(agentGrant, 0, ""));
         _setAgentCaps(_caps(HOLD, 3 * HOLD, type(uint128).max, 10, true, false));
         vm.prank(buyer);
-        child.grant(ROOT, sub2, _wide(), 0, "");
-        ICrestVault.Caps memory narrowed = _wide();
-        narrowed.mayDelegate = false;
-        vm.prank(principal);
-        child.setCaps(ROOT, narrowed, "");
-        vm.prank(buyer);
         vm.expectRevert(ICrestVault.MayNotDelegate.selector);
-        child.grant(ROOT, stranger, _wide(), 0, "");
+        child.grant(ROOT, sub2, _wide(), 0, "");
         vm.prank(buyer);
         vm.expectRevert(ICrestVault.NotAuthorized.selector);
         child.setCaps(ROOT, _wide(), "");

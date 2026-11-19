@@ -112,13 +112,19 @@ contract CrestVault is ICrestVault {
     {
         Grant storage p = _grants[parentId];
         if (p.controller == address(0)) revert NoGrant();
-        _requireDelegator(parentId, p);
-        if (!_isTopPrincipal(msg.sender)) _requireUsable(parentId);
+        if (!authorityOver(msg.sender, parentId)) revert NotAuthorized();
+        if (!_isTopPrincipal(msg.sender)) _requireDelegable(parentId);
         if (p.closed) revert GrantClosed(parentId);
         if (controller == address(0)) revert ZeroAddress();
         _requireValid(caps);
         id = uint256(keccak256(abi.encode(parentId, controller, salt)));
-        if (id <= ROOT || _grants[id].controller != address(0) || grantOf[controller] != 0) revert GrantExists();
+        uint256 held = grantOf[controller];
+        if (id <= ROOT || _grants[id].controller != address(0) || held == ROOT) revert GrantExists();
+        if (held != 0) {
+            if (!_above(msg.sender, held)) revert GrantExists();
+            _grants[held].closed = true;
+            emit Closed(held, msg.sender, note);
+        }
         Grant storage g = _grants[id];
         (g.parent, g.controller, g.caps) = (parentId, controller, caps);
         grantOf[controller] = id;
@@ -132,11 +138,8 @@ contract CrestVault is ICrestVault {
         _requireValid(caps);
         Grant storage g = _grants[id];
         Caps memory previous = g.caps;
-        if (g.periodIndex == uint40(block.timestamp / previous.period)) {
-            g.periodIndex = uint40(block.timestamp / caps.period);
-        } else {
-            (g.periodIndex, g.inPeriod) = (0, 0);
-        }
+        uint256 end = (block.timestamp / caps.period + 1) * caps.period;
+        if (g.windowEnd > end) g.windowEnd = uint40(end);
         g.caps = caps;
         emit CapsSet(id, previous, caps, msg.sender, note);
     }
@@ -175,8 +178,8 @@ contract CrestVault is ICrestVault {
         if (grantId == ROOT && parent == address(0)) revert NoChildFromTheRoot();
         Grant storage g = _grants[grantId];
         if (g.controller == address(0)) revert NoGrant();
-        _requireDelegator(grantId, g);
-        _requireUsable(grantId);
+        if (!authorityOver(msg.sender, grantId)) revert NotAuthorized();
+        _requireDelegable(grantId);
         address childPrincipal = g.controller;
         child = ICrestFactory(factory).childAddressOf(address(this), childPrincipal, grantId, salt);
         if (grantOfChild[child] != 0) return child;
@@ -189,12 +192,12 @@ contract CrestVault is ICrestVault {
     function fundChild(address child, uint256 amount, bytes calldata note) external {
         uint256 id = grantOfChild[child];
         if (id == 0) revert UnknownChild();
-        _requireDelegator(id, _grants[id]);
+        if (!authorityOver(msg.sender, id)) revert NotAuthorized();
+        _requireDelegable(id);
         uint128 a = _amount(amount);
         for (uint256 g = id; g != 0; g = _grants[g].parent) {
             _chargeOne(g, a, bytes32(0), false);
         }
-        if (parent != address(0)) ICrestVault(parent).checkState(parentGrant);
         emit ChildFunded(child, id, amount, msg.sender, note);
         SafeTransferLib.safeTransfer(token, child, amount);
     }
@@ -310,7 +313,7 @@ contract CrestVault is ICrestVault {
     }
 
     /// @inheritdoc ICrestVault
-    function checkState(uint256 id) external view {
+    function checkDelegable(uint256 id) external view {
         _walk(id, false, 0, 0);
     }
 
@@ -349,13 +352,6 @@ contract CrestVault is ICrestVault {
         if (msg.sender != principal) revert NotAuthorized();
     }
 
-    function _requireDelegator(uint256 id, Grant storage g) internal view {
-        if (msg.sender == g.controller && g.caps.mayDelegate) return;
-        if (_above(msg.sender, id)) return;
-        if (msg.sender == g.controller) revert MayNotDelegate();
-        revert NotAuthorized();
-    }
-
     function _chargeOne(uint256 id, uint128 amount, bytes32 counterparty, bool payment) internal {
         Grant storage x = _grants[id];
         Caps memory c = x.caps;
@@ -366,11 +362,11 @@ contract CrestVault is ICrestVault {
             if (uint256(x.open) + 1 > c.maxOpen) revert TooManyOpen(id);
             x.open += 1;
         }
-        uint40 index = uint40(block.timestamp / c.period);
-        uint256 inPeriod = index == x.periodIndex ? x.inPeriod : 0;
+        uint256 start = block.timestamp / c.period * c.period;
+        uint256 inPeriod = x.windowEnd > start ? x.inPeriod : 0;
         if (inPeriod + amount > c.perPeriod) revert OverPerPeriod(id);
         if (uint256(x.spent) + amount > c.lifetime) revert OverLifetime(id);
-        (x.inPeriod, x.periodIndex) = (uint128(inPeriod + amount), index);
+        (x.inPeriod, x.windowEnd) = (uint128(inPeriod + amount), uint40(start + c.period));
         x.spent += amount;
     }
 
@@ -380,21 +376,24 @@ contract CrestVault is ICrestVault {
         if (c.expiresAt != 0 && block.timestamp >= c.expiresAt) revert Expired(id);
     }
 
-    function _requireUsable(uint256 id) internal view {
+    function _requireDelegable(uint256 id) internal view {
         _walk(id, false, 0, 0);
     }
 
+    /// For a payment, the state, per-payment limit and allow list of every grant on the path; for delegating, the state
+    /// and `mayDelegate` of every grant on it. Both continue in every ancestor vault.
     function _walk(uint256 id, bool payment, uint256 amount, bytes32 counterparty) internal view {
         for (uint256 g = id; g != 0; g = _grants[g].parent) {
             Grant storage x = _grants[g];
             Caps memory c = x.caps;
             _requireState(g, x, c);
+            if (!payment && !c.mayDelegate) revert MayNotDelegate();
             if (payment && amount > c.perSpend) revert OverPerSpend(g);
             if (payment && c.restricted && !allowed[g][counterparty]) revert CounterpartyNotAllowed(g);
         }
         if (parent == address(0)) return;
         if (payment) ICrestVault(parent).checkPath(parentGrant, amount, counterparty);
-        else ICrestVault(parent).checkState(parentGrant);
+        else ICrestVault(parent).checkDelegable(parentGrant);
     }
 
     function _requireExists(uint256 id) internal view {
