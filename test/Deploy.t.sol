@@ -66,13 +66,13 @@ contract DeployTest is CrestBase {
         allowList.set(v, g, m.counterpartyOf(seller, adjudicator, fallbackAdj, appealAdj), true, "");
         vm.stopPrank();
         usdc.mint(address(v), HOLD);
-        H.Terms memory t = _vterms(address(v), buyer);
+        assertTrue(m.VAULT_IS_BUYER(), "the deployed module takes only the vault as the buyer");
+        H.Terms memory t = _vterms(address(v), address(v));
+        H.Agree memory a = H.Agree({nonce: keccak256("agree"), expiresAt: t.timing.offerExpiresAt, signature: ""});
+        (uint8 sv, bytes32 r, bytes32 s) = vm.sign(BUYER_PK, rules.typedDataHash(hx.agree(hx.id(t), t.buyer, a)));
+        a.signature = abi.encode(address(m), abi.encodeCall(m.agreeMessage, (t, a)), abi.encodePacked(r, s, sv));
         bytes32 id = m.agreeAndFund(
-            t,
-            _sellerSig(t, SELLER_PK),
-            _acceptance(t, ADJ_PK),
-            _agree(t, BUYER_PK),
-            H.Funding({signature: new bytes(65)})
+            t, _sellerSig(t, SELLER_PK), _acceptance(t, ADJ_PK), a, H.Funding({signature: new bytes(65)})
         );
         assertEq(uint8(_stage(id)), uint8(IHoldbackRules.Stage.Held));
     }

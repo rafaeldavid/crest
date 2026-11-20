@@ -10,12 +10,12 @@ import {HoldbackTypes as H} from "holdback/HoldbackTypes.sol";
 import {Deploy} from "../../script/Deploy.s.sol";
 import {CrestVault} from "../../src/CrestVault.sol";
 import {ICrestVault} from "../../src/ICrestVault.sol";
-import {CrestBase} from "../CrestBase.sol";
+import {VaultBuyerBase} from "../VaultBuyerBase.sol";
 
 /// The deploy rehearsal on a fork of Sepolia: the script deploys against Holdback's live rules contract, escrow,
 /// collector and test token, checks itself, and a vault from it pays one deal inside its caps to Released and is
 /// refused one above them. Runs only when `CREST_FORK_URL` names a Sepolia RPC; skipped otherwise, as in CI.
-contract SepoliaForkTest is CrestBase {
+contract SepoliaForkTest is VaultBuyerBase {
     /// Holdback's own record of its Sepolia deployment, at the commit the submodule pins.
     string internal constant RECORD = "lib/holdback/contracts/deployments/sepolia.json";
 
@@ -54,9 +54,9 @@ contract SepoliaForkTest is CrestBase {
     }
 
     function test_onSepolia_insideTheCaps_fundsAndReleases() public {
-        H.Terms memory t = _vterms(address(vault), buyer);
+        H.Terms memory t = _bterms(vault);
         uint256 sellerBefore = usdc.balanceOf(seller);
-        bytes32 id = _fundVia(t, BUYER_PK);
+        bytes32 id = _fundAs(t, BUYER_PK);
         assertEq(uint8(_stage(id)), uint8(IHoldbackRules.Stage.Held));
         assertEq(usdc.balanceOf(address(vault)), HOLD);
         _release(t, id);
@@ -64,9 +64,11 @@ contract SepoliaForkTest is CrestBase {
     }
 
     function test_onSepolia_aboveThePerSpendCap_refused() public {
-        H.Terms memory t = _vterms(address(vault), buyer);
+        H.Terms memory t = _bterms(vault);
         t.price = PRICE + 1;
-        _expectRefused(t, BUYER_PK, abi.encodeWithSelector(ICrestVault.OverPerSpend.selector, agentGrant));
+        _expectFundRefused(
+            t, _agreeAs(t, BUYER_PK), abi.encodeWithSelector(ICrestVault.OverPerSpend.selector, agentGrant)
+        );
         assertEq(usdc.balanceOf(address(vault)), 2 * HOLD);
     }
 }

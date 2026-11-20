@@ -58,7 +58,7 @@ contract DeployOnSepoliaTest is ChainGuardBase {
         assertGt(address(script.allowListAddress()).code.length, 0, "the default list is deployed");
         vm.removeFile(path);
         bytes32 salt = keccak256("crest v01");
-        bytes memory moduleCode = abi.encodePacked(type(HoldbackModule).creationCode, abi.encode(RULES));
+        bytes memory moduleCode = abi.encodePacked(type(HoldbackModule).creationCode, abi.encode(RULES, true));
         // The fee the script reads from `CREST_FEE_BPS` and `CREST_FEE_SWEEPER`, so the rehearsal runs with the real
         // deploy's settings when they are set.
         (uint256 feeBps, address feeSweeper) = script.feeOf();

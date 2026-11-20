@@ -7,7 +7,7 @@ import {EIP712} from "solady/utils/EIP712.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 
 import {ICrestFactory} from "./ICrestFactory.sol";
-import {ICrestEscrowModule, ICrestList, ICrestVault} from "./ICrestVault.sol";
+import {ICrestBuyerModule, ICrestEscrowModule, ICrestList, ICrestVault} from "./ICrestVault.sol";
 
 interface IERC3009Domain {
     function DOMAIN_SEPARATOR() external view returns (bytes32);
@@ -337,12 +337,15 @@ contract CrestVault is ICrestVault, EIP712 {
     }
 
     /// @inheritdoc ICrestVault
-    function isValidSignature(bytes32 hash, bytes calldata) external view returns (bytes4) {
-        uint256 approved;
-        assembly {
-            approved := tload(hash)
+    function isValidSignature(bytes32 hash, bytes calldata signature) external view returns (bytes4) {
+        if (msg.sender == token) {
+            uint256 approved;
+            assembly {
+                approved := tload(hash)
+            }
+            return approved == 1 ? ERC1271_MAGIC : ERC1271_NO;
         }
-        return approved == 1 && msg.sender == token ? ERC1271_MAGIC : ERC1271_NO;
+        return signature.length > 65 && _signedAsBuyer(hash, signature) ? ERC1271_MAGIC : ERC1271_NO;
     }
 
     // Views
@@ -365,6 +368,32 @@ contract CrestVault is ICrestVault, EIP712 {
     /// @inheritdoc ICrestVault
     function checkDelegable(uint256 id) external view {
         _walk(id, false, 0, 0);
+    }
+
+    /// @inheritdoc ICrestVault
+    function signsFor(address who, uint256 id) public view returns (bool) {
+        return who != address(0) && ((_grants[id].controller == who && pathLive(id)) || signsAbove(who, id));
+    }
+
+    /// @inheritdoc ICrestVault
+    function signsAbove(address who, uint256 id) public view returns (bool) {
+        if (who == address(0)) return false;
+        if (_isTopPrincipal(who)) return true;
+        for (uint256 g = _grants[id].parent; g != 0; g = _grants[g].parent) {
+            if (_grants[g].controller == who && pathLive(g)) return true;
+        }
+        return parent != address(0) && ICrestVault(parent).signsAbove(who, parentGrant);
+    }
+
+    /// @inheritdoc ICrestVault
+    function pathLive(uint256 id) public view returns (bool) {
+        if (_grants[id].controller == address(0)) return false;
+        for (uint256 g = id; g != 0; g = _grants[g].parent) {
+            Grant storage x = _grants[g];
+            uint40 end = x.caps.expiresAt;
+            if (x.closed || x.paused || (end != 0 && block.timestamp >= end)) return false;
+        }
+        return parent == address(0) || ICrestVault(parent).pathLive(parentGrant);
     }
 
     /// @inheritdoc ICrestVault
@@ -425,6 +454,26 @@ contract CrestVault is ICrestVault, EIP712 {
             if (_grants[g].controller == who && !_grants[g].closed) return true;
         }
         return parent != address(0) && ICrestVault(parent).isAbove(who, parentGrant);
+    }
+
+    /// A venue's buyer message signed for this vault (`isValidSignature`): `signature` is `abi.encode(module, message,
+    /// ecdsa)`, and the module rebuilds the message's digest.
+    function _signedAsBuyer(bytes32 hash, bytes calldata signature) internal view returns (bool) {
+        (address module, bytes memory message, bytes memory ecdsa) = abi.decode(signature, (address, bytes, bytes));
+        if (ecdsa.length != 65 || payeeOf(module) == address(0)) return false;
+        ICrestBuyerModule.BuyerMessage memory m = ICrestBuyerModule(module).buyerMessage(message);
+        if (m.digest != hash || m.buyer != address(this)) return false;
+        address signer = ECDSA.tryRecover(hash, ecdsa);
+        if (signer == address(0)) return false;
+        Open storage o = _opens[m.commitment];
+        if (o.module != address(0)) return o.module == module && signsFor(signer, o.grant);
+        uint256 leaf = grantOf[signer];
+        if (!m.beforeFunding || m.payer != address(this) || leaf == 0) return false;
+        try this.checkPath(leaf, m.amount + m.amount * FEE_BPS / 10_000, m.counterparty) {
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     function _isTopPrincipal(address who) internal view returns (bool) {
