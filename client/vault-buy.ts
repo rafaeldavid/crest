@@ -64,7 +64,7 @@ const VAULT = crestAbi('CrestVault'), MODULE = crestAbi('HoldbackModule');
 const ERRORS = fundingErrors();
 
 const rpc = env('CREST_RPC');
-const publicClient = v.createPublicClient({ transport: v.http(rpc) });
+const publicClient = v.createPublicClient({ transport: v.http(rpc, { retryCount: 6, retryDelay: 1500 }) });
 const chainId = await publicClient.getChainId();
 // Test chains only, by allow list: a local chain (31337) or Sepolia (11155111). The repository's mainnet list is checked too.
 const TEST_CHAINS = [31337, 11155111];
@@ -231,7 +231,7 @@ async function fundingCall(signer: J, p: { dir: string; saved: J }, id: string, 
   return { terms, args: [enc.termsView(terms), sellerSignature, enc.acceptanceView(acceptance), agree, { signature: fundingSignature }], signer };
 }
 
-const gas = () => v.createWalletClient({ account: v.accounts.privateKeyToAccount(env('CREST_GAS_KEY')), chain, transport: v.http(rpc) });
+const gas = () => v.createWalletClient({ account: v.accounts.privateKeyToAccount(env('CREST_GAS_KEY')), chain, transport: v.http(rpc, { retryCount: 6, retryDelay: 1500 }) });
 
 /** Tells the vault that each of this agent's ended deals has ended, so its open count falls. Anyone may; the helper pays. */
 async function closeEnded(except?: string): Promise<Array<{ commitmentId: string; tx: string }>> {
@@ -309,7 +309,9 @@ try {
       console.error(printable(sentence));
       process.exit(5);
     }
-    const tx = await helper.writeContract({ address: module, abi: MODULE, functionName: 'agreeAndFund', args: callArgs, gas: 3_000_000n });
+    // The chain's own estimate, and half again: a test network's gas costs can differ from a local EVM's.
+    const est = await publicClient.estimateContractGas({ address: module, abi: MODULE, functionName: 'agreeAndFund', args: callArgs, account: helper.account });
+    const tx = await helper.writeContract({ address: module, abi: MODULE, functionName: 'agreeAndFund', args: callArgs, gas: (est * 3n) / 2n });
     const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
     if (receipt.status !== 'success') {
       out({ refused: 'reverted on chain', commitmentId: id, tx, gasUsed: receipt.gasUsed, sent: true });
