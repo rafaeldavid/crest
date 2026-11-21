@@ -1,10 +1,12 @@
-# Crest
+# Crow Vault
 
 Spend controls for AI agents, enforced on chain.
 
+This repository is Crow Vault, formerly `crest`, at `github.com/rafaeldavid/crow-agent-vault`. It was renamed on 2026-11-21.
+
 A principal's vault holds the money. Each agent, and each agent's short-lived sub-agents, gets a grant with limits no wider than its parent's: the most per deal and per period, a total, how many deals may be open at once, approved merchants tied to their payout addresses, an expiry and a stop. Every payment is checked and counted at every level up to the principal, in the transaction that commits the money, so no agent can spend past any level above it. The principal takes back any money not yet committed and stops any agent at once.
 
-Crest knows how to pay; it knows nothing of what it pays for. A module per venue says what a payment is. The first module pays a hold in Holdback, the escrow behind Crow, whose contracts Crest uses unchanged.
+Crow Vault knows how to pay; it knows nothing of what it pays for. A module per venue says what a payment is. The first module pays a hold in Holdback, the escrow behind Crow, whose contracts Crow Vault uses unchanged.
 
 **State:** design and first build, on test networks only. No real money. Not audited: unreviewed.
 
